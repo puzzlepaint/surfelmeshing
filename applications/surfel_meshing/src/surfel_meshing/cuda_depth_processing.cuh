@@ -37,6 +37,8 @@
 
 #include <libvis/cuda/cuda_buffer.h>
 
+#include "surfel_meshing/cuda_matrix.cuh"
+
 namespace vis {
 
 // Performs:
@@ -61,12 +63,11 @@ void OutlierDepthMapFusionCUDA(
     float tolerance,
     const CUDABuffer<DepthT>& input_depth,
     const PinholeCamera4f& depth_camera,
-    const SE3f& reference_TR_global,
     const CUDABuffer<DepthT>** other_depths,
-    const SE3f* global_TR_others,
+    const CUDAMatrix3x4* others_TR_reference,
     CUDABuffer<u16>* output_depth);
 
-// Variant of OutlierDepthMapFusionCUDA() which does not required to observe a depth value in all other frames.
+// Variant of OutlierDepthMapFusionCUDA() which does not require to observe a depth value in all other frames.
 template <int count, typename DepthT>
 void OutlierDepthMapFusionCUDA(
     cudaStream_t stream,
@@ -74,9 +75,8 @@ void OutlierDepthMapFusionCUDA(
     float tolerance,
     const CUDABuffer<DepthT>& input_depth,
     const PinholeCamera4f& depth_camera,
-    const SE3f& reference_TR_global,
     const CUDABuffer<DepthT>** other_depths,
-    const SE3f* global_TR_others,
+    const CUDAMatrix3x4* others_TR_reference,
     CUDABuffer<u16>* output_depth);
 
 template <typename DepthT>

@@ -580,10 +580,10 @@ void PatchMatchStereoCPU::ComputeDepthMap_(
     
     bool even_iteration = iteration % 2 == 0;
     for (int y = even_iteration ? context_radius_ : (reference_camera.height() - context_radius_ - 1);
-         y >= context_radius_ && y < reference_camera.height() - context_radius_;
+         y >= context_radius_ && y < static_cast<int>(reference_camera.height()) - context_radius_;
          y += even_iteration ? 1 : -1) {
       for (int x = even_iteration ? context_radius_ : (reference_camera.width() - context_radius_ - 1);
-           x >= context_radius_ && x < reference_camera.width() - context_radius_;
+           x >= context_radius_ && x < static_cast<int>(reference_camera.width()) - context_radius_;
            x += even_iteration ? 1 : -1) {
         // Attempt mutation.
         float proposed_inv_depth = (*inv_depth_map)(x, y);

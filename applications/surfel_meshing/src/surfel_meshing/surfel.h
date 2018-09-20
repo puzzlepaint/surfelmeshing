@@ -57,6 +57,8 @@ struct Front {
 // for meshing.
 class Surfel {
  public:
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+  
   // Generally used to mark invalid indices to surfels.
   constexpr static u32 kInvalidIndex = std::numeric_limits<u32>::max();
   // Used in octree node free lists for free-list entries (instead of surfel indices).

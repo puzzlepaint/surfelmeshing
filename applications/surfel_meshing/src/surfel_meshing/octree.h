@@ -44,6 +44,8 @@ namespace vis {
 
 // An octree node, containing up to 8 children and a list of surfels.
 struct OctreeNode {
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+  
   // Constructor. Does not initialize the parent. This can be done by calling
   // AddChild() on the new node's parent.
   template <typename Derived>

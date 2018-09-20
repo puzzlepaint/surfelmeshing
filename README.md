@@ -44,6 +44,11 @@ known to work):
 * Qt (5.2.1)
 * zlib
 
+Notice that the versions of CUDA and Eigen must be compatible since some Eigen headers are included in
+code compiled by CUDA's nvcc compiler. At the time of writing, this meant that for a recent CUDA version (9.1),
+the development version of Eigen had to be used instead of the latest release. PCL also depends on Eigen and
+thus it might be good to ensure that it uses the same version.
+
 After obtaining all dependencies, the application can be built with CMake, for example as follows:
 ```
 mkdir build_RelWithDebInfo
@@ -138,15 +143,6 @@ These controls can be used in the terminal after the dataset processing finished
 * t: perform full re-triangulation of all surfels
 * p: Save the current mesh (the filename must be specified with the `--export_mesh` option); the mesh will also be saved when the program exits
 * k: Record a keyframe (see `--record_keyframes` and `--playback_keyframes` options)
-
-
-
-## Known issues ##
-
-The [Eigen library's alignment requirements](https://eigen.tuxfamily.org/dox/group__DenseMatrixManipulation__Alignement.html)
-do not seem to cause any trouble on the code author's PC if violated. Therefore, most likely,
-they are not accounted for everywhere in the code and it might not work
-on systems where the alignment matters. Patches for this are welcome.
 
 
 

@@ -36,7 +36,6 @@
 
 #include <math_constants.h>
 
-#include "surfel_meshing/cuda_matrix.cuh"
 #include "surfel_meshing/cuda_util.cuh"
 
 // Uncomment this to run CUDA kernels sequentially for debugging.
@@ -229,9 +228,8 @@ void OutlierDepthMapFusionCUDA(
     float tolerance,
     const CUDABuffer<DepthT>& input_depth,
     const PinholeCamera4f& depth_camera,
-    const SE3f& reference_TR_global,
     const CUDABuffer<DepthT>** other_depths,
-    const SE3f* global_TR_others,
+    const CUDAMatrix3x4* others_TR_reference,
     CUDABuffer<u16>* output_depth) {
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
@@ -242,8 +240,7 @@ void OutlierDepthMapFusionCUDA(
   
   OutlierDepthMapFusionCUDAKernelParam<count, DepthT> p;
   for (int i = 0; i < kOtherCount; ++ i) {
-    SE3f other_TR_reference_cpu = (reference_TR_global * global_TR_others[i]).inverse();
-    p.other_TR_reference[i] = CUDAMatrix3x4(other_TR_reference_cpu.matrix3x4());
+    p.other_TR_reference[i] = others_TR_reference[i];
     
     p.other_depths[i] = other_depths[i]->ToCUDA();
   }
@@ -292,9 +289,8 @@ void OutlierDepthMapFusionCUDA<9, u16>(
     float tolerance,
     const CUDABuffer<u16>& input_depth,
     const PinholeCamera4f& depth_camera,
-    const SE3f& reference_TR_global,
     const CUDABuffer<u16>** other_depths,
-    const SE3f* global_TR_others,
+    const CUDAMatrix3x4* others_TR_reference,
     CUDABuffer<u16>* output_depth);
 template
 void OutlierDepthMapFusionCUDA<7, u16>(
@@ -302,9 +298,8 @@ void OutlierDepthMapFusionCUDA<7, u16>(
     float tolerance,
     const CUDABuffer<u16>& input_depth,
     const PinholeCamera4f& depth_camera,
-    const SE3f& reference_TR_global,
     const CUDABuffer<u16>** other_depths,
-    const SE3f* global_TR_others,
+    const CUDAMatrix3x4* others_TR_reference,
     CUDABuffer<u16>* output_depth);
 template
 void OutlierDepthMapFusionCUDA<5, u16>(
@@ -312,9 +307,8 @@ void OutlierDepthMapFusionCUDA<5, u16>(
     float tolerance,
     const CUDABuffer<u16>& input_depth,
     const PinholeCamera4f& depth_camera,
-    const SE3f& reference_TR_global,
     const CUDABuffer<u16>** other_depths,
-    const SE3f* global_TR_others,
+    const CUDAMatrix3x4* others_TR_reference,
     CUDABuffer<u16>* output_depth);
 template
 void OutlierDepthMapFusionCUDA<3, u16>(
@@ -322,9 +316,8 @@ void OutlierDepthMapFusionCUDA<3, u16>(
     float tolerance,
     const CUDABuffer<u16>& input_depth,
     const PinholeCamera4f& depth_camera,
-    const SE3f& reference_TR_global,
     const CUDABuffer<u16>** other_depths,
-    const SE3f* global_TR_others,
+    const CUDAMatrix3x4* others_TR_reference,
     CUDABuffer<u16>* output_depth);
 
 
@@ -397,9 +390,8 @@ void OutlierDepthMapFusionCUDA(
     float tolerance,
     const CUDABuffer<DepthT>& input_depth,
     const PinholeCamera4f& depth_camera,
-    const SE3f& reference_TR_global,
     const CUDABuffer<DepthT>** other_depths,
-    const SE3f* global_TR_others,
+    const CUDAMatrix3x4* others_TR_reference,
     CUDABuffer<u16>* output_depth) {
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
@@ -410,8 +402,7 @@ void OutlierDepthMapFusionCUDA(
   
   OutlierDepthMapFusionCUDAKernelParam<count, DepthT> p;
   for (int i = 0; i < kOtherCount; ++ i) {
-    SE3f other_TR_reference_cpu = (reference_TR_global * global_TR_others[i]).inverse();
-    p.other_TR_reference[i] = CUDAMatrix3x4(other_TR_reference_cpu.matrix3x4());
+    p.other_TR_reference[i] = others_TR_reference[i];
     
     p.other_depths[i] = other_depths[i]->ToCUDA();
   }
@@ -462,9 +453,8 @@ void OutlierDepthMapFusionCUDA<9, u16>(
     float tolerance,
     const CUDABuffer<u16>& input_depth,
     const PinholeCamera4f& depth_camera,
-    const SE3f& reference_TR_global,
     const CUDABuffer<u16>** other_depths,
-    const SE3f* global_TR_others,
+    const CUDAMatrix3x4* others_TR_reference,
     CUDABuffer<u16>* output_depth);
 template
 void OutlierDepthMapFusionCUDA<7, u16>(
@@ -473,9 +463,8 @@ void OutlierDepthMapFusionCUDA<7, u16>(
     float tolerance,
     const CUDABuffer<u16>& input_depth,
     const PinholeCamera4f& depth_camera,
-    const SE3f& reference_TR_global,
     const CUDABuffer<u16>** other_depths,
-    const SE3f* global_TR_others,
+    const CUDAMatrix3x4* others_TR_reference,
     CUDABuffer<u16>* output_depth);
 template
 void OutlierDepthMapFusionCUDA<5, u16>(
@@ -484,9 +473,8 @@ void OutlierDepthMapFusionCUDA<5, u16>(
     float tolerance,
     const CUDABuffer<u16>& input_depth,
     const PinholeCamera4f& depth_camera,
-    const SE3f& reference_TR_global,
     const CUDABuffer<u16>** other_depths,
-    const SE3f* global_TR_others,
+    const CUDAMatrix3x4* others_TR_reference,
     CUDABuffer<u16>* output_depth);
 template
 void OutlierDepthMapFusionCUDA<3, u16>(
@@ -495,9 +483,8 @@ void OutlierDepthMapFusionCUDA<3, u16>(
     float tolerance,
     const CUDABuffer<u16>& input_depth,
     const PinholeCamera4f& depth_camera,
-    const SE3f& reference_TR_global,
     const CUDABuffer<u16>** other_depths,
-    const SE3f* global_TR_others,
+    const CUDAMatrix3x4* others_TR_reference,
     CUDABuffer<u16>* output_depth);
 
 

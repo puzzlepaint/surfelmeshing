@@ -31,7 +31,7 @@
 
 #include <cuda_runtime.h>
 
-#include <libvis/eigen.h>
+#include <Eigen/src/Core/MatrixBase.h>
 
 namespace vis {
 

@@ -59,6 +59,8 @@ class SurfelMeshing;
 // Renders the SurfelMeshing visualization.
 class SurfelMeshingRenderWindow : public RenderWindowCallbacks {
  public:
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+  
   SurfelMeshingRenderWindow(
       bool render_new_surfels_as_splats,
       float splat_half_extent_in_pixels,

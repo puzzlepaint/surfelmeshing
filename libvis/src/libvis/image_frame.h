@@ -41,6 +41,8 @@ namespace vis {
 template<typename T, typename PoseType>
 class ImageFrame : public ImageCache<T> {
  public:
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+  
   typedef ImageCache<T> Base;
   
   inline ImageFrame()

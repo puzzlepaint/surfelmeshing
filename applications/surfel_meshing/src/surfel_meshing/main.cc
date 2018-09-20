@@ -1019,22 +1019,26 @@ int main(int argc, char** argv) {
     
     // Depth outlier filtering.
     // Scale the poses to match the depth scaling. This is faster than scaling the depths of all pixels to match the poses.
+    SE3f input_depth_frame_scaled_frame_T_global = input_depth_frame->frame_T_global();
+    input_depth_frame_scaled_frame_T_global.translation() = depth_scaling * input_depth_frame_scaled_frame_T_global.translation();
+    
     const CUDABuffer<u16>* other_depths[outlier_filtering_frame_count];
     SE3f global_TR_others[outlier_filtering_frame_count];
+    CUDAMatrix3x4 others_TR_reference[outlier_filtering_frame_count];
     for (int i = 0; i < outlier_filtering_frame_count / 2; ++ i) {
       int offset = i + 1;
       
       other_depths[i] = frame_index_to_depth_buffer.at(frame_index - offset).get();
       global_TR_others[i] = rgbd_video.depth_frame_mutable(frame_index - offset)->global_T_frame();
       global_TR_others[i].translation() = depth_scaling * global_TR_others[i].translation();
+      others_TR_reference[i] = CUDAMatrix3x4((input_depth_frame_scaled_frame_T_global * global_TR_others[i]).inverse().matrix3x4());
       
-      other_depths[outlier_filtering_frame_count / 2 + i] = frame_index_to_depth_buffer.at(frame_index + offset).get();
-      global_TR_others[outlier_filtering_frame_count / 2 + i] = rgbd_video.depth_frame_mutable(frame_index + offset)->global_T_frame();
-      global_TR_others[outlier_filtering_frame_count / 2 + i].translation() = depth_scaling * global_TR_others[outlier_filtering_frame_count / 2 + i].translation();
+      int k = outlier_filtering_frame_count / 2 + i;
+      other_depths[k] = frame_index_to_depth_buffer.at(frame_index + offset).get();
+      global_TR_others[k] = rgbd_video.depth_frame_mutable(frame_index + offset)->global_T_frame();
+      global_TR_others[k].translation() = depth_scaling * global_TR_others[k].translation();
+      others_TR_reference[k] = CUDAMatrix3x4((input_depth_frame_scaled_frame_T_global * global_TR_others[k]).inverse().matrix3x4());
     }
-    
-    SE3f input_depth_frame_scaled_frame_T_global = input_depth_frame->frame_T_global();
-    input_depth_frame_scaled_frame_T_global.translation() = depth_scaling * input_depth_frame_scaled_frame_T_global.translation();
     
     if (outlier_filtering_required_inliers == -1 ||
         outlier_filtering_required_inliers == outlier_filtering_frame_count) {
@@ -1045,9 +1049,8 @@ int main(int argc, char** argv) {
               outlier_filtering_depth_tolerance_factor, \
               filtered_depth_buffer_A, \
               depth_camera, \
-              input_depth_frame_scaled_frame_T_global, \
               other_depths, \
-              global_TR_others, \
+              others_TR_reference, \
               &filtered_depth_buffer_B)
       if (outlier_filtering_frame_count == 2) {
         CALL_OUTLIER_FUSION(2);
@@ -1070,9 +1073,8 @@ int main(int argc, char** argv) {
               outlier_filtering_depth_tolerance_factor, \
               filtered_depth_buffer_A, \
               depth_camera, \
-              input_depth_frame_scaled_frame_T_global, \
               other_depths, \
-              global_TR_others, \
+              others_TR_reference, \
               &filtered_depth_buffer_B)
       if (outlier_filtering_frame_count == 2) {
         CALL_OUTLIER_FUSION(2);

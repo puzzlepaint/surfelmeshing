@@ -41,8 +41,9 @@ namespace vis {
 
 // Represents a camera frustum for intersection tests.
 class CameraFrustum {
- EIGEN_MAKE_ALIGNED_OPERATOR_NEW
  public:
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+  
   // No-op constructor.
   inline CameraFrustum()
       : axes_and_planes_computed_(false) {}
