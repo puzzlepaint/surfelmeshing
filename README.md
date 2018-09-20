@@ -204,7 +204,7 @@ A list of optional program arguments follows, grouped by category:
 * `--measurement_blending_radius` (default: 12): Radius for measurement blending in pixels.
 * `--regularization_iterations_per_integration_iteration` (default: 1): Number of regularization (gradient descent) iterations performed per depth integration iteration.
 * `--radius_factor_for_regularization_neighbors` (default: 2): Factor on the surfel radius for how far regularization neighbors can be away from a surfel.
-* `--surfel_integration_active_window_size` (default: numeric_limits<int>::max()): Number of frames which need to pass before a surfel becomes inactive. If there are no loop closures, set this to a value larger than the dataset frame count to disable surfel deactivation.
+* `--surfel_integration_active_window_size` (default: numeric_limits&lt;int>::max()): Number of frames which need to pass before a surfel becomes inactive. If there are no loop closures, set this to a value larger than the dataset frame count to disable surfel deactivation.
 
 #### Meshing ####
 
