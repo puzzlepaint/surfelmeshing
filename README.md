@@ -7,7 +7,7 @@
 SurfelMeshing is an approach for real-time surfel-based mesh reconstruction from
 RGB-D video, described in the following paper:
 
-T. Schöps, T. Sattler, M. Pollefeys, "SurfelMeshing: Online Surfel-Based Mesh Reconstruction", ArXiv, 2018. \[link will be added soon\]
+T. Schöps, T. Sattler, M. Pollefeys, "SurfelMeshing: Online Surfel-Based Mesh Reconstruction", ArXiv, 2018. \[[pdf](http://arxiv.org/abs/1810.00729)\]\[[video](https://youtu.be/ouspbzHk5L0)\]
 
 If you use the SurfelMeshing code for research, please cite this paper.
 
