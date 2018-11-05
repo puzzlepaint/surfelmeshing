@@ -596,10 +596,11 @@ int main(int argc, char** argv) {
   
   // Create render window.
   shared_ptr<SurfelMeshingRenderWindow> render_window =
-      make_shared<SurfelMeshingRenderWindow>(render_new_surfels_as_splats,
-                                             splat_half_extent_in_pixels,
-                                             triangle_normal_shading,
-                                             render_camera_frustum);
+      shared_ptr<SurfelMeshingRenderWindow>(
+          new SurfelMeshingRenderWindow(render_new_surfels_as_splats,
+                                        splat_half_extent_in_pixels,
+                                        triangle_normal_shading,
+                                        render_camera_frustum));
   shared_ptr<RenderWindow> generic_render_window =
       RenderWindow::CreateWindow("SurfelMeshing", render_window_default_width, render_window_default_height, RenderWindow::API::kOpenGL, render_window);
   
