@@ -45,9 +45,8 @@ known to work):
 * zlib
 
 Notice that the versions of CUDA and Eigen must be compatible since some Eigen headers are included in
-code compiled by CUDA's nvcc compiler. At the time of writing, this meant that for a recent CUDA version (9.1),
-the development version of Eigen had to be used instead of the latest release. PCL also depends on Eigen and
-thus it might be good to ensure that it uses the same version.
+code compiled by CUDA's nvcc compiler. For example, for CUDA version 9.1, it seemed that Eigen 3.3.6 is required.
+PCL also depends on Eigen and thus it might be important to ensure that it uses the same version.
 
 After obtaining all dependencies, the application can be built with CMake, for example as follows:
 ```
