@@ -106,6 +106,10 @@ In case you encounter issues with insufficient GPU memory, try decreasing the
 maximum surfel count with the `--max_surfel_count` option (default: 20000000).
 However, the program will abort once this surfel count is exceeded.
 
+In case you encounter the issue "Cuda Error: too many resources requested for launch",
+you likely need to reduce the CUDA kernel block sizes in applications/surfel_meshing/src/surfel_meshing/cuda_surfel_reconstruction.cu.
+See [this GitHub issue](https://github.com/puzzlepaint/surfelmeshing/issues/3).
+
 
 
 ## 3D window controls ##
