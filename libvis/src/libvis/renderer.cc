@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -29,7 +29,7 @@
 
 #include "libvis/renderer.h"
 
-#include <glog/logging.h>
+#include "libvis/logging.h"
 
 #include "libvis/opengl.h"
 
@@ -137,7 +137,7 @@ void RendererProgramBase::Initialize(
 }
 
 void RendererProgramBase::SetUniformValues(const Camera& camera) {
-  CHOOSE_CAMERA_TEMPLATE(
+  IDENTIFY_CAMERA(
       camera,
       (reinterpret_cast<RendererProgram<_camera_type>*>(this))
           ->SetUniformValues(_camera));
@@ -244,7 +244,7 @@ RendererProgramStorage::depth_program(Camera::Type type) {
   } else {
     // Create new program.
     RendererProgramBasePtr new_program;
-    CHOOSE_CAMERA_TYPE(type,
+    IDENTIFY_CAMERA_TYPE(type,
                        new_program.reset(new RendererProgram<_type>()));
     new_program->Initialize(false, true);
     depth_programs_.insert(make_pair(static_cast<int>(type), new_program));
@@ -260,7 +260,7 @@ RendererProgramStorage::color_and_depth_program(Camera::Type type) {
   } else {
     // Create new program.
     RendererProgramBasePtr new_program;
-    CHOOSE_CAMERA_TYPE(type,
+    IDENTIFY_CAMERA_TYPE(type,
                        new_program.reset(new RendererProgram<_type>()));
     new_program->Initialize(true, true);
     color_and_depth_programs_.insert(make_pair(static_cast<int>(type), new_program));
@@ -475,6 +475,7 @@ void Renderer::SetupProjection(
     cy = pinhole_camera.parameters()[3];
   } else {
     LOG(FATAL) << "Camera type not supported.";
+    return;
   }
 
   // Row-wise projection matrix construction.

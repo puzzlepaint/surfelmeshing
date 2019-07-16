@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -67,16 +67,52 @@
 
 #include <memory>
 
-#include <glog/logging.h>
+#include "libvis/logging.h"
 
 #include "libvis/eigen.h"
 #include "libvis/libvis.h"
 
 namespace vis {
 
+// Different image coordinate system conventions, which describe how coordinates
+// in an image relate to its pixels.
 enum class ImageCoordinateConvention {
+  // The origin of the image (pixel) coordinates is at the top left image
+  // corner, i.e., at the top left corner of the top left pixel in the image.
+  // 
+  // This convention is convenient for rounding a pixel value to integer
+  // coordinates, since the result will be the pixel square which the original
+  // floating point coordinate is in.
+  // 
+  // Coordinate of the top left corner: (0, 0)
+  // Coordinate of the center of the top left pixel: (0.5, 0.5)
+  // Coordinate of the center of the bottom right pixel: (width - 0.5, height - 0.5)
+  // Coordinate of the bottom right corner: (width, height)
   kPixelCorner = 0,
+  
+  // The origin of the image (pixel) coordinates is in the center of the top
+  // left pixel in the image.
+  // 
+  // This convention is convenient for bilinear filtering, since the offsets
+  // from the pixel centers can be computed easily.
+  // 
+  // Coordinate of the top left corner: (-0.5, -0.5)
+  // Coordinate of the center of the top left pixel: (0, 0)
+  // Coordinate of the center of the bottom right pixel: (width - 1, height - 1)
+  // Coordinate of the bottom right corner: (width - 0.5, height - 0.5)
   kPixelCenter = 1,
+  
+  // The origin of the image (pixel) coordinates is at the top left image
+  // corner, i.e., at the top left corner of the top left pixel in the image.
+  // The image coordinates are scaled such that (1, 1) corresponds to the bottom
+  // right corner of the image (regardless of the image size).
+  // 
+  // This convention is convenient when working with textures on the GPU.
+  // 
+  // Coordinate of the top left corner: (0, 0)
+  // Coordinate of the center of the top left pixel: (0.5 / width, 0.5 / height)
+  // Coordinate of the center of the bottom right pixel: ((width - 0.5) / width, (height - 0.5) / height)
+  // Coordinate of the bottom right corner: (1, 1)
   kRatio = 2
 };
 
@@ -87,7 +123,9 @@ inline bool ProjectToPixelCornerConvIfVisibleHelper(
     const CameraT& camera, const MatrixBase<Derived>& camera_space_point, float pixel_border, Matrix<double, 2, 1>* pixel_coordinates) {
   Matrix<typename CameraT::ScalarT, 2, 1> temp;
   bool result = camera.ProjectToPixelCornerConvIfVisible(camera_space_point.template cast<typename CameraT::ScalarT>(), pixel_border, &temp);
-  *pixel_coordinates = temp.template cast<double>();
+  if (result) {
+    *pixel_coordinates = temp.template cast<double>();
+  }
   return result;
 }
 
@@ -96,7 +134,9 @@ inline bool ProjectToPixelCenterConvIfVisibleHelper(
     const CameraT& camera, const MatrixBase<Derived>& camera_space_point, float pixel_border, Matrix<double, 2, 1>* pixel_coordinates) {
   Matrix<typename CameraT::ScalarT, 2, 1> temp;
   bool result = camera.ProjectToPixelCenterConvIfVisible(camera_space_point.template cast<typename CameraT::ScalarT>(), pixel_border, &temp);
-  *pixel_coordinates = temp.template cast<double>();
+  if (result) {
+    *pixel_coordinates = temp.template cast<double>();
+  }
   return result;
 }
 
@@ -105,7 +145,9 @@ inline bool ProjectToRatioConvIfVisibleHelper(
     const CameraT& camera, const MatrixBase<Derived>& camera_space_point, float pixel_border, Matrix<double, 2, 1>* pixel_coordinates) {
   Matrix<typename CameraT::ScalarT, 2, 1> temp;
   bool result = camera.ProjectToRatioConvIfVisible(camera_space_point.template cast<typename CameraT::ScalarT>(), pixel_border, &temp);
-  *pixel_coordinates = temp.template cast<double>();
+  if (result) {
+    *pixel_coordinates = temp.template cast<double>();
+  }
   return result;
 }
 
@@ -141,7 +183,7 @@ inline bool ProjectToRatioConvIfVisibleHelper(
 // While the Camera base class provides access to most operations via virtual
 // functions, for improved performance it should be preferred to determine the
 // derived CameraImpl type and call its functions directly. This can be done
-// using the ChooseCameraTemplate() function. It determines the type via the
+// using the IdentifyCamera() function. It determines the type via the
 // type ID. Note that this only works with types that are defined in the library
 // already, not with user-defined types.
 // Design consideration:
@@ -270,7 +312,7 @@ class Camera {
   // 
   // NOTE 2: If performance matters, you should call the corresponding functions of the
   // derived class directly. Write a helper template function and call it with
-  // e.g. CHOOSE_CAMERA_TEMPLATE() to access the derived camera type directly in this
+  // e.g. IDENTIFY_CAMERA() to access the derived camera type directly in this
   // function.
   template <typename Derived>
   inline bool ProjectToPixelCornerConvIfVisible(
@@ -294,7 +336,7 @@ class Camera {
   // 
   // NOTE 2: If performance matters, you should call the corresponding functions of the
   // derived class directly. Write a helper template function and call it with
-  // e.g. CHOOSE_CAMERA_TEMPLATE() to access the derived camera type directly in this
+  // e.g. IDENTIFY_CAMERA() to access the derived camera type directly in this
   // function.
   template <typename Derived>
   inline Matrix<double, 2, 1> ProjectToPixelCornerConv(const MatrixBase<Derived>& camera_space_point) const;
@@ -315,7 +357,7 @@ class Camera {
   // 
   // NOTE 2: If performance matters, you should call the corresponding functions of the
   // derived class directly. Write a helper template function and call it with
-  // e.g. CHOOSE_CAMERA_TEMPLATE() to access the derived camera type directly in this
+  // e.g. IDENTIFY_CAMERA() to access the derived camera type directly in this
   // function.
   template <typename Derived>
   inline Matrix<double, 3, 1> UnprojectFromPixelCornerConv(const MatrixBase<Derived>& pixel_coordinates) const;
@@ -754,10 +796,10 @@ class ThinPrismFisheyeDistortion8 {
     
     const Scalar nx = undistorted_point.coeff(0);
     const Scalar ny = undistorted_point.coeff(1);
-    const float nx_ny = nx * ny;
+    const Scalar nx_ny = nx * ny;
     
     // NOTE: Could factor out more terms here which might improve performance.
-    const float term1 = 2*p1*nx + 2*p2*ny + 2*k1*nx_ny + 6*k3*nx_ny*r4 + 8*k4*nx_ny*r6 + 4*k2*nx_ny*r2;
+    const Scalar term1 = 2*p1*nx + 2*p2*ny + 2*k1*nx_ny + 6*k3*nx_ny*r4 + 8*k4*nx_ny*r6 + 4*k2*nx_ny*r2;
     (*jacobian)(0, 0) = 2*k1*x2 + 4*k2*x2*r2 + 6*k3*x2*r4 + 8*k4*x2*r6 + k2*r4 + k3*r6 + k4*r8 + 6*p2*nx + 2*p1*ny + 2*sx1*nx + k1*r2 + 1;
     (*jacobian)(0, 1)= 2*sx1*ny + term1;
     (*jacobian)(1, 0) = 2*sy1*nx + term1;
@@ -1059,8 +1101,8 @@ class NonParametricBicubicProjection {
     const Scalar& max_nx = parameters[4];
     const Scalar& max_ny = parameters[5];
     
-    Scalar fc = (normalized_image_coordinates.coeff(0) - min_nx) * (resolution_x_ / (max_nx - min_nx));
-    Scalar fr = (normalized_image_coordinates.coeff(1) - min_ny) * (resolution_y_ / (max_ny - min_ny));
+    Scalar fc = (normalized_image_coordinates.coeff(0) - min_nx) * ((resolution_x_ - 1) / (max_nx - min_nx));
+    Scalar fr = (normalized_image_coordinates.coeff(1) - min_ny) * ((resolution_y_ - 1) / (max_ny - min_ny));
     const int row = std::floor(fr);
     const int col = std::floor(fc);
     Scalar r_frac = fr - row;
@@ -1109,8 +1151,8 @@ class NonParametricBicubicProjection {
     const Scalar& max_nx = parameters[4];
     const Scalar& max_ny = parameters[5];
     
-    Scalar fc = (normalized_image_coordinates.coeff(0) - min_nx) * (resolution_x_ / (max_nx - min_nx));
-    Scalar fr = (normalized_image_coordinates.coeff(1) - min_ny) * (resolution_y_ / (max_ny - min_ny));
+    Scalar fc = (normalized_image_coordinates.coeff(0) - min_nx) * ((resolution_x_ - 1) / (max_nx - min_nx));
+    Scalar fr = (normalized_image_coordinates.coeff(1) - min_ny) * ((resolution_y_ - 1) / (max_ny - min_ny));
     const int row = std::floor(fr);
     const int col = std::floor(fc);
     
@@ -1135,7 +1177,7 @@ class NonParametricBicubicProjection {
     // Auto-generated part.
     const Scalar term0 = -min_nx;
     const Scalar term1 = 1.0/(max_nx + term0);
-    const Scalar term2 = resolution_x_*term1;
+    const Scalar term2 = (resolution_x_ - 1)*term1;
     const Scalar term3_nonfrac = term2*(nx + term0);
     const Scalar term3 = term3_nonfrac - std::floor(term3_nonfrac);
     const Scalar term4 = -0.5*p[1][0].x();
@@ -1147,7 +1189,7 @@ class NonParametricBicubicProjection {
     const Scalar term10 = 0.5*p[1][2].x() + term3*(term7 + term9) + term4;
     const Scalar term11 = term10*term3;
     const Scalar term12 = -min_ny;
-    const Scalar term13 = resolution_y_/(max_ny + term12);
+    const Scalar term13 = (resolution_y_ - 1)/(max_ny + term12);
     const Scalar term14_nonfrac = term13*(ny + term12);
     const Scalar term14 = term14_nonfrac - std::floor(term14_nonfrac);
     const Scalar term15 = -0.5*p[0][0].x();
@@ -1520,7 +1562,8 @@ class CameraImpl : public CameraImplVariadic<Scalar, Steps...> {
   }
   
   inline virtual CameraImpl<TypeID, Scalar, Steps...>* Scaled(double factor) const override {
-    Scalar scaled_parameters[parameters_.size()];
+    vector<Scalar> scaled_parameters_vec(parameters_.size());
+    Scalar* scaled_parameters = scaled_parameters_vec.data();
     memcpy(scaled_parameters, parameters_.data(), parameters_.size() * sizeof(Scalar));
     Base::ScaleParameters(factor, scaled_parameters);
     return new CameraImpl<TypeID, Scalar, Steps...>(
@@ -1530,7 +1573,8 @@ class CameraImpl : public CameraImplVariadic<Scalar, Steps...> {
   }
   
   inline virtual CameraImpl<TypeID, Scalar, Steps...>* Cropped(int left, int top, int right, int bottom) const override {
-    Scalar cropped_parameters[parameters_.size()];
+    vector<Scalar> cropped_parameters_vec(parameters_.size());
+    Scalar* cropped_parameters = cropped_parameters_vec.data();
     memcpy(cropped_parameters, parameters_.data(), parameters_.size() * sizeof(Scalar));
     Base::CropParameters(left, top, right, bottom, cropped_parameters);
     return new CameraImpl<TypeID, Scalar, Steps...>(
@@ -1596,7 +1640,7 @@ typedef CameraImpl<static_cast<int>(Camera::Type::kNonParametricBicubicProjectio
 // functor with this template type and the given arguments.
 // Const Camera version with functor.
 template<template<typename CameraType> class Functor, class... Args>
-void ChooseCameraTemplate(const Camera& camera, Args... args) {
+void IdentifyCamera(const Camera& camera, Args... args) {
   if (camera.type_int() == static_cast<int>(Camera::Type::kPinholeCamera4f)) {
     Functor<PinholeCamera4f> functor;
     functor(*reinterpret_cast<const PinholeCamera4f*>(&camera), args...);
@@ -1607,7 +1651,7 @@ void ChooseCameraTemplate(const Camera& camera, Args... args) {
 
 // Mutable Camera version with functor.
 template<template<typename CameraType> class Functor, class... Args>
-void ChooseCameraTemplate(Camera* camera, Args... args) {
+void IdentifyCamera(Camera* camera, Args... args) {
   if (camera->type_int() == static_cast<int>(Camera::Type::kPinholeCamera4f)) {
     Functor<PinholeCamera4f> functor;
     functor(reinterpret_cast<PinholeCamera4f*>(camera), args...);
@@ -1616,17 +1660,17 @@ void ChooseCameraTemplate(Camera* camera, Args... args) {
   }
 }
 
-// Since the function-based ChooseCameraTemplate() variants require a functor which may
+// Since the function-based IdentifyCamera() variants require a functor which may
 // be annoying, and it seems to be impossible to pass a template function
 // (without a functor) as a template parameter, there is also a macro version of
-// ChooseCameraTemplate() (for const Camera object).
+// IdentifyCamera() (for const Camera object).
 // The object type is available as _object_type within the call (with the actual
 // camera variable name inserted for object), and the object with its derived
 // type is available as _object. The call is to be inserted for the
 // variable-length argument "...". This is because a single macro argument
 // would cause trouble as soon as commas are within the call: They would be
 // interpreted as argument separators for the macro.
-#define CHOOSE_CAMERA_TEMPLATE(object, ...)                                  \
+#define IDENTIFY_CAMERA(object, ...)                                  \
   {                                                                          \
     if ((object).type() == Camera::Type::kPinholeCamera4f) {                 \
       typedef PinholeCamera4f _##object##_type;                              \
@@ -1653,16 +1697,16 @@ void ChooseCameraTemplate(Camera* camera, Args... args) {
       (void)_##object;                                                       \
       __VA_ARGS__;                                                           \
     } else {                                                                 \
-      LOG(FATAL) << "CHOOSE_CAMERA_TEMPLATE() encountered an invalid type: " << static_cast<int>((object).type()); \
+      LOG(FATAL) << "IDENTIFY_CAMERA() encountered an invalid type: " << static_cast<int>((object).type()); \
     }                                                                        \
   }
 
-#define CHOOSE_CAMERA_TEMPLATE2(objectA, objectB, ...)                       \
+#define IDENTIFY_CAMERA2(objectA, objectB, ...)                       \
   {                                                                          \
-    CHOOSE_CAMERA_TEMPLATE(objectA, CHOOSE_CAMERA_TEMPLATE(objectB, __VA_ARGS__)); \
+    IDENTIFY_CAMERA(objectA, IDENTIFY_CAMERA(objectB, __VA_ARGS__)); \
   }
 
-#define CHOOSE_CAMERA_TYPE(type, ...)                                        \
+#define IDENTIFY_CAMERA_TYPE(type, ...)                                        \
   {                                                                          \
     if ((type) == Camera::Type::kPinholeCamera4f) {                          \
       typedef PinholeCamera4f _type;                                         \
@@ -1677,19 +1721,19 @@ void ChooseCameraTemplate(Camera* camera, Args... args) {
       typedef NonParametricBicubicProjectionCamerad _type;                   \
       __VA_ARGS__;                                                           \
     } else {                                                                 \
-      LOG(FATAL) << "CHOOSE_CAMERA_TYPE() encountered an invalid type: " << static_cast<int>(type); \
+      LOG(FATAL) << "IDENTIFY_CAMERA_TYPE() encountered an invalid type: " << static_cast<int>(type); \
     }                                                                        \
   }
 
 
 // The implementations of the following template functions of the Camera
-// class must be down here to be able to use CHOOSE_CAMERA_TEMPLATE(), which
+// class must be down here to be able to use IDENTIFY_CAMERA(), which
 // needs to know about all derived classes.
 template <typename Derived>
 inline bool Camera::ProjectToPixelCornerConvIfVisible(
     const MatrixBase<Derived>& camera_space_point, float pixel_border, Matrix<double, 2, 1>* pixel_coordinates) const {
   const Camera& this_camera = *this;
-  CHOOSE_CAMERA_TEMPLATE(this_camera, return ProjectToPixelCornerConvIfVisibleHelper(_this_camera, camera_space_point, pixel_border, pixel_coordinates));
+  IDENTIFY_CAMERA(this_camera, return ProjectToPixelCornerConvIfVisibleHelper(_this_camera, camera_space_point, pixel_border, pixel_coordinates));
   return false;
 }
 
@@ -1697,7 +1741,7 @@ template <typename Derived>
 inline bool Camera::ProjectToPixelCenterConvIfVisible(
     const MatrixBase<Derived>& camera_space_point, float pixel_border, Matrix<double, 2, 1>* pixel_coordinates) const {
   const Camera& this_camera = *this;
-  CHOOSE_CAMERA_TEMPLATE(this_camera, return ProjectToPixelCenterConvIfVisibleHelper(_this_camera, camera_space_point, pixel_border, pixel_coordinates));
+  IDENTIFY_CAMERA(this_camera, return ProjectToPixelCenterConvIfVisibleHelper(_this_camera, camera_space_point, pixel_border, pixel_coordinates));
   return false;
 }
 
@@ -1705,61 +1749,61 @@ template <typename Derived>
 inline bool Camera::ProjectToRatioConvIfVisible(
     const MatrixBase<Derived>& camera_space_point, float pixel_border, Matrix<double, 2, 1>* pixel_coordinates) const {
   const Camera& this_camera = *this;
-  CHOOSE_CAMERA_TEMPLATE(this_camera, return ProjectToRatioConvIfVisibleHelper(_this_camera, camera_space_point, pixel_border, pixel_coordinates));
+  IDENTIFY_CAMERA(this_camera, return ProjectToRatioConvIfVisibleHelper(_this_camera, camera_space_point, pixel_border, pixel_coordinates));
   return false;
 }
 
 template <typename Derived>
 inline Matrix<double, 2, 1> Camera::ProjectToPixelCornerConv(const MatrixBase<Derived>& camera_space_point) const {
   const Camera& this_camera = *this;
-  CHOOSE_CAMERA_TEMPLATE(this_camera, return _this_camera.ProjectToPixelCornerConv(camera_space_point).template cast<double>());
+  IDENTIFY_CAMERA(this_camera, return _this_camera.ProjectToPixelCornerConv(camera_space_point).template cast<double>());
   return Matrix<double, 2, 1>();
 }
 
 template <typename Derived>
 inline Matrix<double, 2, 1> Camera::ProjectToPixelCenterConv(const MatrixBase<Derived>& camera_space_point) const {
   const Camera& this_camera = *this;
-  CHOOSE_CAMERA_TEMPLATE(this_camera, return _this_camera.ProjectToPixelCenterConv(camera_space_point).template cast<double>());
+  IDENTIFY_CAMERA(this_camera, return _this_camera.ProjectToPixelCenterConv(camera_space_point).template cast<double>());
   return Matrix<double, 2, 1>();
 }
 
 template <typename Derived>
 inline Matrix<double, 2, 1> Camera::ProjectToRatioConv(const MatrixBase<Derived>& camera_space_point) const {
   const Camera& this_camera = *this;
-  CHOOSE_CAMERA_TEMPLATE(this_camera, return _this_camera.ProjectToRatioConv(camera_space_point).template cast<double>());
+  IDENTIFY_CAMERA(this_camera, return _this_camera.ProjectToRatioConv(camera_space_point).template cast<double>());
   return Matrix<double, 2, 1>();
 }
 
 template <typename Derived>
 inline Matrix<double, 3, 1> Camera::UnprojectFromPixelCornerConv(const MatrixBase<Derived>& pixel_coordinates) const {
   const Camera& this_camera = *this;
-  CHOOSE_CAMERA_TEMPLATE(this_camera, return _this_camera.UnprojectFromPixelCornerConv(pixel_coordinates).template cast<double>());
+  IDENTIFY_CAMERA(this_camera, return _this_camera.UnprojectFromPixelCornerConv(pixel_coordinates).template cast<double>());
   return Matrix<double, 3, 1>();
 }
 
 template <typename Derived>
 inline Matrix<double, 3, 1> Camera::UnprojectFromPixelCenterConv(const MatrixBase<Derived>& pixel_coordinates) const {
   const Camera& this_camera = *this;
-  CHOOSE_CAMERA_TEMPLATE(this_camera, return _this_camera.UnprojectFromPixelCenterConv(pixel_coordinates).template cast<double>());
+  IDENTIFY_CAMERA(this_camera, return _this_camera.UnprojectFromPixelCenterConv(pixel_coordinates).template cast<double>());
   return Matrix<double, 3, 1>();
 }
 
 template <typename Derived>
 inline Matrix<double, 3, 1> Camera::UnprojectFromRatioConv(const MatrixBase<Derived>& pixel_coordinates) const {
   const Camera& this_camera = *this;
-  CHOOSE_CAMERA_TEMPLATE(this_camera, return _this_camera.UnprojectFromRatioConv(pixel_coordinates).template cast<double>());
+  IDENTIFY_CAMERA(this_camera, return _this_camera.UnprojectFromRatioConv(pixel_coordinates).template cast<double>());
   return Matrix<double, 3, 1>();
 }
 
 inline u32 Camera::parameter_count() const {
   const Camera& this_camera = *this;
-  CHOOSE_CAMERA_TEMPLATE(this_camera, return _this_camera.parameter_count());
+  IDENTIFY_CAMERA(this_camera, return _this_camera.parameter_count());
   return 0;
 }
 
 inline const void* Camera::parameters() const {
   const Camera& this_camera = *this;
-  CHOOSE_CAMERA_TEMPLATE(this_camera, return _this_camera.parameters());
+  IDENTIFY_CAMERA(this_camera, return _this_camera.parameters());
   return nullptr;
 }
 
@@ -1772,7 +1816,7 @@ inline Camera* Camera::ReadFromText(std::istream* stream) {
     return nullptr;
   }
   
-  CHOOSE_CAMERA_TYPE(static_cast<Camera::Type>(type_int), return ReadFromTextHelper<_type>(stream));
+  IDENTIFY_CAMERA_TYPE(static_cast<Camera::Type>(type_int), return ReadFromTextHelper<_type>(stream));
   return nullptr;
 }
 
@@ -1796,8 +1840,8 @@ bool AreCamerasEqualHelper(const CameraA& camera_a, const CameraB& camera_b) {
 };
 
 inline bool AreCamerasEqual(const Camera& camera_a, const Camera& camera_b) {
-  bool result;
-  CHOOSE_CAMERA_TEMPLATE2(camera_a, camera_b, result = AreCamerasEqualHelper(_camera_a, _camera_b));
+  bool result = false;
+  IDENTIFY_CAMERA2(camera_a, camera_b, result = AreCamerasEqualHelper(_camera_a, _camera_b));
   return result;
 }
 

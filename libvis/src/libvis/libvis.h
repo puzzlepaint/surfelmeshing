@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -55,12 +55,73 @@ typedef uint8_t u8;
 // end). This should be done with the LIBVIS_APPLICATION() macro.
 class LibvisApplication {
  public:
-  LibvisApplication();
-  ~LibvisApplication();
+  LibvisApplication(int argc, char** argv);
+  
+  void SetDefaultQSurfaceFormat();
+  
+  int WrapQtEventLoopAround(int (*func)(int, char**), int argc, char** argv);
 };
 
-// This macro should be at the start of the main() function of every program
-// using libvis.
-#define LIBVIS_APPLICATION() vis::LibvisApplication app
+
+// Each application using libvis must use either LIBVIS_MAIN or LIBVIS_QT_MAIN
+// (or do analogous things manually). This design arose from Qt's requirement
+// to have GUI code run in the first (main) thread.
+// 
+// LIBVIS_MAIN() runs a Qt event loop in the main thread, while starting the
+// actual program in a second thread.
+// Pro: This ensures that GUI created by libvis has an event loop running for it
+//      in the background.
+// Con: If the application wants to create Qt widgets itself, it has to ensure
+//      that this happens in the libvis-created thread, for example using
+//      RunInQtThread[Blocking]().
+// 
+// LIBVIS_QT_MAIN() assumes that the application will run a Qt event loop itself
+// in the main thread.
+// Pro: The application can use Qt normally.
+// Con: libvis' GUI functionality will only work as long as the main thread runs
+//      a Qt event loop. This might not always be easy to achieve, for example,
+//      if a secondary thread wants to visualize something while the main thread
+//      is busy with something else.
+// TODO: For this variant, we could provide a function that runs a temporary
+//       event loop locally, analogous to OpenCV's waitKey(). But this will only
+//       work if called from the main thread.
+
+// This macro must replace the name of the main() function of every program
+// using libvis; for Qt applications however which run a Qt event loop
+// themselves, LIBVIS_QT_MAIN() must be used instead.
+// 
+// Usage:
+// int LIBVIS_MAIN(int argc, char** argv) {
+//   // Application code here
+// }
+#define LIBVIS_MAIN(argc_def, argv_def) \
+  __libvis_main(int argc, char** argv); \
+  \
+  int main(int argc, char** argv) { \
+    vis::LibvisApplication app(argc, argv); \
+    app.SetDefaultQSurfaceFormat(); \
+    return WrapQtEventLoopAround(&__libvis_main, argc, argv); \
+  } \
+  \
+  int __libvis_main(argc_def, argv_def)
+
+// Variant of the LIBVIS_MAIN() macro for Qt applications that run a Qt
+// event loop themselves. Please note that libvis' GUI functionality might not
+// work as long as no Qt event loop is running.
+// 
+// Usage:
+// int LIBVIS_QT_MAIN(int argc, char** argv) {
+//   // Application code here
+// }
+#define LIBVIS_QT_MAIN(argc_def, argv_def) \
+  __libvis_main(int argc, char** argv); \
+  \
+  int main(int argc, char** argv) { \
+    vis::LibvisApplication app(argc, argv); \
+    app.SetDefaultQSurfaceFormat(); \
+    return __libvis_main(argc, argv); \
+  } \
+  \
+  int __libvis_main(argc_def, argv_def)
 
 }

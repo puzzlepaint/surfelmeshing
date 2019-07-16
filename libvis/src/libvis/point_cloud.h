@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2018, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -31,7 +31,7 @@
 
 #include <fstream>
 
-#include <glog/logging.h>
+#include "libvis/logging.h"
 
 #include "libvis/eigen.h"
 #include "libvis/image.h"
@@ -40,23 +40,27 @@
 
 namespace vis {
 
-// Point type storing only a position attribute.
-template <typename T>
+/// Point type storing only a position attribute.
+template <typename PositionT>
 struct Point {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   
-  inline Point(const T& position)
+  inline Point(const PositionT& position)
       : position_(position) {}
   
-  inline T& position() { return position_; }
-  inline const T& position() const { return position_; }
+  inline PositionT& position() { return position_; }
+  inline const PositionT& position() const { return position_; }
   
  private:
-  T position_;
+  PositionT position_;
 };
 
 
-// Point type storing position and color.
+/// Point type storing position and normal.
+// TODO: Implement this
+
+
+/// Point type storing position and color.
 template <typename PositionT, typename ColorT>
 struct PointC {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
@@ -76,8 +80,32 @@ struct PointC {
 };
 
 
-// Traits type for querying the presence of point attributes.
-// Must have a specialization for each point type that is used.
+/// Point type storing position, color, and normal.
+template <typename PositionT, typename ColorT, typename NormalT>
+struct PointCN {
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+  
+  inline PointCN(const PositionT& position, const ColorT& color, const NormalT& normal)
+      : position_(position), color_(color), normal_(normal) {}
+  
+  inline PositionT& position() { return position_; }
+  inline const PositionT& position() const { return position_; }
+  
+  inline ColorT& color() { return color_; }
+  inline const ColorT& color() const { return color_; }
+  
+  inline NormalT& normal() { return normal_; }
+  inline const NormalT& normal() const { return normal_; }
+  
+ private:
+  PositionT position_;
+  ColorT color_;
+  NormalT normal_;
+};
+
+
+/// Traits type for querying the presence of point attributes.
+/// Must have a specialization for each point type that is used.
 template <typename PointT>
 struct PointTraits {};
 
@@ -86,21 +114,32 @@ struct PointTraits<Point<_PositionT>> {
   typedef _PositionT PositionT;
   
   static const bool has_color = false;
-  typedef Vec2u8 ColorT;  // The chosen default type here does not matter.
+  static const bool has_normal = false;
 };
 
 template<typename _PositionT, typename _ColorT>
 struct PointTraits<PointC<_PositionT, _ColorT>> {
   typedef _PositionT PositionT;
+  typedef _ColorT ColorT;
   
   static const bool has_color = true;
+  static const bool has_normal = false;
+};
+
+template<typename _PositionT, typename _ColorT, typename _NormalT>
+struct PointTraits<PointCN<_PositionT, _ColorT, _NormalT>> {
+  typedef _PositionT PositionT;
   typedef _ColorT ColorT;
+  typedef _NormalT NormalT;
+  
+  static const bool has_color = true;
+  static const bool has_normal = true;
 };
 
 
-// Traits type for applying a cast to Eigen Matrix types or to scalar types,
-// either using static_cast<>() or using Eigen::Matrix::cast<>(),
-// by passing for example unsigned char or Eigen::Matrix<float, 1, 1> as T.
+/// Traits type for applying a cast to Eigen Matrix types or to scalar types,
+/// either using static_cast<>() or using Eigen::Matrix::cast<>(),
+/// by passing for example unsigned char or Eigen::Matrix<float, 1, 1> as T.
 template <typename InputT>
 struct CastEigenOrScalar {
   template <typename T>
@@ -118,49 +157,72 @@ struct CastEigenOrScalar<Eigen::Matrix<_Scalar, _Rows, _Cols, _Options, _MaxRows
 };
 
 
-// Generic point cloud type, templated with the point type T.
-// The point types should have some attributes with common names such that they
-// can be used by PointCloud. At the moment, this is position() which is
-// expected to return a writable reference to an Eigen::Vector compatible type,
-// and if the point types has colors, color() to return the color.
+/// Generic point cloud type, templated with the point type PointT, storing the
+/// points in CPU memory.
+/// 
+/// The point types should have some attributes with common names such that they
+/// can be used by PointCloud. At the moment, this is position() which is
+/// expected to return a writable reference to an Eigen::Vector compatible type,
+/// and if the point types has colors, color() to return the color in the same
+/// way.
 template <typename PointT>
 class PointCloud {
  public:
   using PositionT = typename PointTraits<PointT>::PositionT;
   
-  // Creates an empty point cloud.
+  /// Creates an empty point cloud.
   PointCloud()
       : data_(nullptr), size_(0), alignment_(0) {}
   
-  // Creates a deep copy of the other point cloud.
+  /// Creates a deep copy of the other point cloud.
   PointCloud(const PointCloud<PointT>& other)
       : data_(nullptr), size_(0), alignment_(0) {
     Resize(other.size_, other.alignment_);
     memcpy(data_, other.data_, SizeInBytes());
   }
   
-  // Creates a point cloud with the given point count. Does not initialize the
-  // point memory. The memory alignment is chosen automatically.
+  /// Creates a point cloud with the given point count. Does not initialize the
+  /// point memory. The memory alignment is chosen automatically.
   PointCloud(usize size)
       : data_(nullptr), size_(0), alignment_(0) {
     Resize(size);
   }
   
-  // Creates a point cloud with the given point count and alignment (in bytes,
-  // must be a power of two and multiple of sizeof(void*), or 1 for no
-  // alignment).
+  /// Creates a point cloud with the given point count and alignment (in bytes,
+  /// must be a power of two and multiple of sizeof(void*), or 1 for no
+  /// alignment).
   PointCloud(usize size, usize alignment)
       : data_(nullptr), size_(0), alignment_(0) {
     Resize(size, alignment);
   }
   
   ~PointCloud() {
-    // Does nothing if data_ is nullptr.
+    /// Does nothing if data_ is nullptr.
     free(data_);
   }
   
-  // Changes the size. Re-allocates the point buffer if the new size is
-  // different from the current one. Does not preserve the point data.
+  /// Appends a point to the cloud. This is slow (since the point buffer is
+  /// reallocated each time) and should only be used if performance does not
+  /// matter. A faster alternative is to count the final required point count
+  /// beforehand and allocate the point buffer with this size only once (on point
+  /// cloud construction, or using Resize()).
+  void AppendSlow(const PointT& point) {
+    PointT* old_data = data_;
+    usize old_size = size_;
+    
+    data_ = nullptr;
+    size_ = 0;
+    
+    Resize(old_size + 1, alignment_);
+    
+    memcpy(data_, old_data, old_size * sizeof(PointT));
+    data_[size_ - 1] = point;
+    
+    free(old_data);
+  }
+  
+  /// Changes the size. Re-allocates the point buffer if the new size is
+  /// different from the current one. Does not preserve the point data.
   void Resize(usize size) {
     if (data_ && size_ == size) {
       return;
@@ -168,10 +230,10 @@ class PointCloud {
     Resize(size, 1);
   }
   
-  // Changes the size and alignment (in bytes, must be a power of two and
-  // multiple of sizeof(void*), or 1 for no alignment). Re-allocates the point
-  // buffer if the new settings are different from the current ones. Does not
-  // preserve the point data.
+  /// Changes the size and alignment (in bytes, must be a power of two and
+  /// multiple of sizeof(void*), or 1 for no alignment). Re-allocates the point
+  /// buffer if the new settings are different from the current ones. Does not
+  /// preserve the point data.
   void Resize(usize size, usize alignment) {
     if (data_ && size_ == size && alignment_ == alignment) {
       return;
@@ -186,6 +248,27 @@ class PointCloud {
       data_ = reinterpret_cast<PointT*>(malloc(size * sizeof(PointT)));
       return_value = (data_ == nullptr) ? (-1) : 0;
     } else {
+#ifdef WIN32
+      data_ = reinterpret_cast<PointT*>(_aligned_malloc(size * sizeof(PointT), alignment));
+    }
+    if (data_ == nullptr) {
+      // An error ocurred.
+      if (errno == EINVAL) {
+        // The alignment argument was not a power of two, or was not a multiple of
+        // sizeof(void*).
+        // TODO
+        LOG(FATAL) << "return_value == EINVAL";
+      } else if (errno == ENOMEM) {
+        // There was insufficient memory to fulfill the allocation request.
+        // TODO
+        LOG(FATAL) << "return_value == ENOMEM";
+      } else {
+        // Unknown error.
+        // TODO
+        LOG(FATAL) << "Unknown error";
+      }
+    }
+#else
       return_value = posix_memalign(reinterpret_cast<void**>(&data_), alignment, size * sizeof(PointT));
     }
     if (return_value != 0) {
@@ -205,16 +288,17 @@ class PointCloud {
         LOG(FATAL) << "Unknown error";
       }
     }
+#endif
     
     size_ = size;
     alignment_ = alignment;
   }
   
-  // Computes the axis-aligned bounding box extents for the point cloud. Does
-  // not do anything for empty point clouds.
-  // TODO: Compare performance between the current method and the one which
-  //       is commented out, and additionally, to using _min and _max directly
-  //       instead of using local variables on the stack.
+  /// Computes the axis-aligned bounding box extents for the point cloud. Does
+  /// not do anything for empty point clouds.
+  /// TODO: Compare performance between the current method and the one which
+  ///       is commented out, and additionally, to using _min and _max directly
+  ///       instead of using local variables on the stack.
   void ComputeMinMax(PositionT* _min, PositionT* _max) const {
     if (empty()) {
       return;
@@ -243,11 +327,11 @@ class PointCloud {
     *_max = max;
   }
   
-  // Un-projects the depth map pixels into 3D space, creates a point for each
-  // valid pixel. Only the depth attribute of the points is set, possible other
-  // attributes remain uninitialized.
-  //
-  // \sa SetFromRGBDImage
+  /// Un-projects the depth map pixels into 3D space, creates a point for each
+  /// valid pixel. Only the depth attribute of the points is set, possible other
+  /// attributes remain uninitialized.
+  ///
+  /// \sa SetFromRGBDImage
   template <typename DepthT, typename CameraT>
   void SetFromDepthImage(const Image<DepthT> depth_image, bool depth_is_inverse, DepthT invalid_depth_value, const CameraT& camera) {
     // Count the valid pixels in the depth image.
@@ -281,11 +365,11 @@ class PointCloud {
     }
   }
   
-  // Un-projects the depth map pixels into 3D space, creates a point for each
-  // valid pixel. This function can only be called on point clouds with point
-  // types that contain a color attribute.
-  //
-  // \sa SetFromDepthImage
+  /// Un-projects the depth map pixels into 3D space, creates a point for each
+  /// valid pixel. This function can only be called on point clouds with point
+  /// types that contain a color attribute.
+  ///
+  /// \sa SetFromDepthImage
   template <typename DepthT, typename ColorT, typename CameraT>
   void SetFromRGBDImage(
       const Image<DepthT> depth_image,
@@ -328,14 +412,22 @@ class PointCloud {
     }
   }
   
-  // Transforms all points in the cloud by left-multiplication with the given
-  // Sophus SE3 transformation.
-  // 
-  // There is a small overhead in computing the rotation matrix from the SE3's
-  // quaternion. If transforming a large number of point clouds, it would be
-  // faster to pre-compute the rotation matrix only once.
+  /// Transforms all points in the cloud by left-multiplication with the given
+  /// Sophus SE3 transformation. Also rotates point normals for clouds with
+  /// normals.
+  /// 
+  /// There is a small overhead in computing the rotation matrix from the SE3's
+  /// quaternion. If transforming a large number of point clouds, it would be
+  /// faster to pre-compute the rotation matrix only once.
+  /// 
+  /// If renormalize_normals is true, the normal vectors will be normalized
+  /// after rotation to avoid the build-up of small errors over time. If the
+  /// point cloud does not contain normals, the value of renormalize_normals is
+  /// ignored.
   template <typename Derived>
-  void Transform(const Sophus::SE3Base<Derived>& transform) {
+  void Transform(
+      const Sophus::SE3Base<Derived>& transform,
+      bool renormalize_normals = false) {
     // Convert the rotation quaternion to a matrix for faster point
     // multiplication.
     Matrix<typename PositionT::Scalar,
@@ -343,14 +435,33 @@ class PointCloud {
            PositionT::RowsAtCompileTime> rotation =
         transform.rotationMatrix().template cast<typename PositionT::Scalar>();
     Matrix<typename PositionT::Scalar,
-          PositionT::RowsAtCompileTime, 1> translation =
+           PositionT::RowsAtCompileTime, 1> translation =
         transform.translation().template cast<typename PositionT::Scalar>();
     
-    for (usize i = 0; i < size_; ++ i) {
-      data_[i].position() = rotation * data_[i].position() + translation;
+    if (renormalize_normals) {
+      TransformHelper<true>(rotation, translation, this);
+    } else {
+      TransformHelper<false>(rotation, translation, this);
     }
   }
   
+  /// Version of Transform() that directly takes a 3x3 rotation matrix and a
+  /// 3x1 translation vector, avoiding their computation from an SE3 object
+  /// (that contains a quaternion for the rotation).
+  template <typename DerivedA, typename DerivedB>
+  void Transform(
+      const MatrixBase<DerivedA>& rotation,
+      const MatrixBase<DerivedB>& translation,
+      bool renormalize_normals = false) {
+    if (renormalize_normals) {
+      TransformHelper<true>(rotation, translation, this);
+    } else {
+      TransformHelper<false>(rotation, translation, this);
+    }
+  }
+  
+  /// Saves the point cloud in .obj format. This is a human-readable ASCII-based
+  /// format; use WriteAsPLY() instead for a more efficient binary format.
   bool WriteAsOBJ(const char* path) {
     ofstream file_stream(path, std::ios::out);
     if (!file_stream) {
@@ -363,46 +474,221 @@ class PointCloud {
     return result;
   }
   
+  /// Saves the point cloud in .obj format. This is a human-readable ASCII-based
+  /// format; use WriteAsPLY() instead for a more efficient binary format.
   template<typename _CharT, typename _Traits>
   bool WriteAsOBJ(basic_ostream<_CharT,_Traits>* stream) {
-    for (usize i = 0; i < size_; ++ i) {
-      const PointT& point = data_[i];
-      *stream << "v " << point.position().x()
-              << " " << point.position().y()
-              << " " << point.position().z();
-      if (PointTraits<PointT>::has_color) {
-        constexpr float kNormalizationFactor =
-            1.0f / numeric_limits<typename PointTraits<PointT>::ColorT::Scalar>::max();
-        *stream << " " << (kNormalizationFactor * point.color().x())
-                << " " << (kNormalizationFactor * point.color().y())
-                << " " << (kNormalizationFactor * point.color().z());
-      }
-      *stream << std::endl;
-    }
+    WriteAsOBJHelper(stream, *this);
     return true;
   }
   
-  // Returns the i-th point in the cloud.
+  /// Saves the point cloud in .ply format (in its binary variant). Returns true
+  /// if successful.
+  bool WriteAsPLY(const string& path) {
+    return WriteAsPLY(path.c_str());
+  }
+  
+  /// Saves the point cloud in .ply format (in its binary variant). Returns true
+  /// if successful.
+  bool WriteAsPLY(const char* path) {
+    FILE* file = fopen(path, "wb");
+    if (!file) {
+      return false;
+    }
+    
+    // Write header
+    std::ostringstream header;  // TODO: Use something faster than ostringstream?
+    header <<  "ply\n"
+               "format binary_little_endian 1.0\n"
+               "element vertex " << size() << "\n";
+    
+    // TODO: Make also work with other types than float
+    header << "property float x\n"
+              "property float y\n"
+              "property float z\n";
+    
+    if (PointTraits<PointT>::has_color) {
+      // TODO: Make also work with other types than uchar
+      header << "property uchar red\n"
+                "property uchar green\n"
+                "property uchar blue\n";
+    }
+    
+    if (PointTraits<PointT>::has_normal) {
+      // TODO: Make also work with other types than float
+      header << "property float nx\n"
+                "property float ny\n"
+                "property float nz\n";
+    }
+    
+    header << "end_header\n";
+    string header_string = header.str();
+    fwrite(header_string.data(), 1, header_string.size(), file);
+    
+    // Write points
+    WriteAsPLYHelper(file, *this);
+    
+    fclose(file);
+    return true;
+  }
+  
+  /// Returns the i-th point in the cloud.
   inline PointT& operator[](int i) { return data_[i]; }
   inline const PointT& operator[](int i) const { return data_[i]; }
   
   inline PointT& at(int i) { return data_[i]; }
   inline const PointT& at(int i) const { return data_[i]; }
   
-  // Returns a pointer to the data.
+  /// Returns a pointer to the data.
   inline const PointT* data() const { return data_; }
   inline PointT* data_mutable() { return data_; }
   
-  // Returns whether the size of the point cloud is zero.
+  /// Returns whether the size of the point cloud is zero.
   inline bool empty() const { return size_ == 0; }
   
-  // Returns the number of points in the cloud.
+  /// Returns the number of points in the cloud.
   inline usize size() const { return size_; }
   
-  // Returns the size of the points in the cloud in bytes.
+  /// Returns the size of the points in the cloud in bytes.
   inline usize SizeInBytes() const { return size_ * sizeof(PointT); }
   
  private:
+  template<typename _CharT, typename _Traits, typename PositionT>
+  static void WriteAsOBJHelper(basic_ostream<_CharT,_Traits>* stream, const PointCloud<Point<PositionT>>& cloud) {
+    for (usize i = 0; i < cloud.size_; ++ i) {
+      const PointT& point = cloud.data_[i];
+      *stream << "v " << point.position().x()
+              << " " << point.position().y()
+              << " " << point.position().z()
+              << std::endl;
+    }
+  }
+  
+  template<typename _CharT, typename _Traits, typename PositionT, typename ColorT>
+  static void WriteAsOBJHelper(basic_ostream<_CharT,_Traits>* stream, const PointCloud<PointC<PositionT, ColorT>>& cloud) {
+    // TODO: This will not work if using scalars for colors
+    constexpr float kNormalizationFactor =
+        1.0f / numeric_limits<typename ColorT::Scalar>::max();
+    for (usize i = 0; i < cloud.size_; ++ i) {
+      const PointT& point = cloud.data_[i];
+      *stream << "v " << point.position().x()
+              << " " << point.position().y()
+              << " " << point.position().z()
+              << " " << (kNormalizationFactor * point.color().x())
+              << " " << (kNormalizationFactor * point.color().y())
+              << " " << (kNormalizationFactor * point.color().z())
+              << std::endl;
+    }
+  }
+  
+  template<typename _CharT, typename _Traits, typename PositionT, typename ColorT, typename NormalT>
+  static void WriteAsOBJHelper(basic_ostream<_CharT,_Traits>* stream, const PointCloud<PointCN<PositionT, ColorT, NormalT>>& cloud) {
+    // It seems that in .obj format, normals are specified separately from
+    // vertices, and they are only merged in face definitions. So we might not
+    // be able to assign normals to vertices directly.
+    // TODO: It might be a reasonable use-case to save the positions and colors
+    //       of a point cloud that also has normals as .obj. In this case, there
+    //       should be a way to deactivate this warning.
+    LOG(WARNING) << "Saving normals in .obj format is not supported. The normals will be missing.";
+    
+    // TODO: This will not work if using scalars for colors
+    constexpr float kNormalizationFactor =
+        1.0f / numeric_limits<typename ColorT::Scalar>::max();
+    for (usize i = 0; i < cloud.size_; ++ i) {
+      const PointT& point = cloud.data_[i];
+      *stream << "v " << point.position().x()
+              << " " << point.position().y()
+              << " " << point.position().z()
+              << " " << (kNormalizationFactor * point.color().x())
+              << " " << (kNormalizationFactor * point.color().y())
+              << " " << (kNormalizationFactor * point.color().z())
+              << std::endl;
+    }
+  }
+  
+  
+  template<typename PositionT>
+  static void WriteAsPLYHelper(FILE* file, const PointCloud<Point<PositionT>>& cloud) {
+    for (usize i = 0; i < cloud.size(); ++ i) {
+      const PointT& point = cloud.data_[i];
+      
+      fwrite(&point.position().x(), sizeof(typename PositionT::Scalar), 1, file);
+      fwrite(&point.position().y(), sizeof(typename PositionT::Scalar), 1, file);
+      fwrite(&point.position().z(), sizeof(typename PositionT::Scalar), 1, file);
+    }
+  }
+  
+  template<typename PositionT, typename ColorT>
+  static void WriteAsPLYHelper(FILE* file, const PointCloud<PointC<PositionT, ColorT>>& cloud) {
+    for (usize i = 0; i < cloud.size(); ++ i) {
+      const PointT& point = cloud.data_[i];
+      
+      fwrite(&point.position().x(), sizeof(typename PositionT::Scalar), 1, file);
+      fwrite(&point.position().y(), sizeof(typename PositionT::Scalar), 1, file);
+      fwrite(&point.position().z(), sizeof(typename PositionT::Scalar), 1, file);
+      fwrite(&point.color().x(), sizeof(typename ColorT::Scalar), 1, file);
+      fwrite(&point.color().y(), sizeof(typename ColorT::Scalar), 1, file);
+      fwrite(&point.color().z(), sizeof(typename ColorT::Scalar), 1, file);
+    }
+  }
+  
+  template<typename PositionT, typename ColorT, typename NormalT>
+  static void WriteAsPLYHelper(FILE* file, const PointCloud<PointCN<PositionT, ColorT, NormalT>>& cloud) {
+    for (usize i = 0; i < cloud.size(); ++ i) {
+      const PointT& point = cloud.data_[i];
+      
+      fwrite(&point.position().x(), sizeof(typename PositionT::Scalar), 1, file);
+      fwrite(&point.position().y(), sizeof(typename PositionT::Scalar), 1, file);
+      fwrite(&point.position().z(), sizeof(typename PositionT::Scalar), 1, file);
+      fwrite(&point.color().x(), sizeof(typename ColorT::Scalar), 1, file);
+      fwrite(&point.color().y(), sizeof(typename ColorT::Scalar), 1, file);
+      fwrite(&point.color().z(), sizeof(typename ColorT::Scalar), 1, file);
+      fwrite(&point.normal().x(), sizeof(typename NormalT::Scalar), 1, file);
+      fwrite(&point.normal().y(), sizeof(typename NormalT::Scalar), 1, file);
+      fwrite(&point.normal().z(), sizeof(typename NormalT::Scalar), 1, file);
+    }
+  }
+  
+  
+  template<bool renormalize_normals, typename DerivedA, typename DerivedB, typename PositionT>
+  static void TransformHelper(
+      const MatrixBase<DerivedA>& rotation,
+      const MatrixBase<DerivedB>& translation,
+      PointCloud<Point<PositionT>>* cloud) {
+    for (usize i = 0; i < cloud->size_; ++ i) {
+      auto& point = cloud->data_[i];
+      point.position() = rotation * point.position() + translation;
+    }
+  }
+  
+  template<bool renormalize_normals, typename DerivedA, typename DerivedB, typename PositionT, typename ColorT>
+  static void TransformHelper(
+      const MatrixBase<DerivedA>& rotation,
+      const MatrixBase<DerivedB>& translation,
+      PointCloud<PointC<PositionT, ColorT>>* cloud) {
+    for (usize i = 0; i < cloud->size_; ++ i) {
+      auto& point = cloud->data_[i];
+      point.position() = rotation * point.position() + translation;
+    }
+  }
+  
+  template<bool renormalize_normals, typename DerivedA, typename DerivedB, typename PositionT, typename ColorT, typename NormalT>
+  static void TransformHelper(
+      const MatrixBase<DerivedA>& rotation,
+      const MatrixBase<DerivedB>& translation,
+      PointCloud<PointCN<PositionT, ColorT, NormalT>>* cloud) {
+    for (usize i = 0; i < cloud->size_; ++ i) {
+      auto& point = cloud->data_[i];
+      point.position() = rotation * point.position() + translation;
+      if (renormalize_normals) {
+        point.normal() = (rotation * point.normal()).normalized();
+      } else {
+        point.normal() = rotation * point.normal();
+      }
+    }
+  }
+  
+  
   PointT* data_;
   usize size_;
   usize alignment_;
@@ -412,9 +698,11 @@ class PointCloud {
 typedef Point<Vec3f> Point3f;
 typedef PointC<Vec3f, u8> Point3fCu8;
 typedef PointC<Vec3f, Vec3u8> Point3fC3u8;
+typedef PointCN<Vec3f, Vec3u8, Vec3f> Point3fC3u8Nf;
 
 typedef PointCloud<Point3f> Point3fCloud;
 typedef PointCloud<Point3fCu8> Point3fCu8Cloud;
 typedef PointCloud<Point3fC3u8> Point3fC3u8Cloud;
+typedef PointCloud<Point3fC3u8Nf> Point3fC3u8NfCloud;
 
 }

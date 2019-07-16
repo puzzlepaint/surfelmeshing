@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -46,14 +46,16 @@ class CUDAUnprojectionLookup2D {
  public:
   inline CUDAUnprojectionLookup2D(const Camera& camera, cudaStream_t stream)
       : lookup_buffer_(camera.height(), camera.width()) {
-    CHOOSE_CAMERA_TEMPLATE(camera, Initialize(_camera, stream));
+    IDENTIFY_CAMERA(camera, Initialize(_camera, stream));
   }
   
   inline ~CUDAUnprojectionLookup2D() {
     cudaDestroyTextureObject(lookup_texture_);
   }
   
-  CUDAUnprojectionLookup2D_ ToCUDA() const;
+  inline cudaTextureObject_t lookup_texture() const {
+    return lookup_texture_;
+  }
   
  private:
   template <typename CameraT>

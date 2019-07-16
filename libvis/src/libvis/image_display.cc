@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -33,17 +33,14 @@ namespace vis {
 
 ImageDisplay::ImageDisplay()
     : window_(nullptr) {
-  // Ensure that the Qt thread is running.
-  QtThread::Instance()->WaitForStartup();
-  
   // Create all QObjects in the Qt thread.
-  QtThread::Instance()->RunInQtThreadBlocking([&](){
+  RunInQtThreadBlocking([&](){
     window_ = new ImageDisplayQtWindow(this);
   });
 }
 
 ImageDisplay::~ImageDisplay() {
-  QtThread::Instance()->RunInQtThreadBlocking([&](){
+  RunInQtThreadBlocking([&](){
     if (window_) {
       window_->SetDisplay(nullptr);
     }
@@ -51,13 +48,13 @@ ImageDisplay::~ImageDisplay() {
 }
 
 void ImageDisplay::Clear() {
-  QtThread::Instance()->RunInQtThreadBlocking([&](){
+  RunInQtThreadBlocking([&](){
     window_->Clear();
   });
 }
 
 void ImageDisplay::Close() {
-  QtThread::Instance()->RunInQtThreadBlocking([&](){
+  RunInQtThreadBlocking([&](){
     delete window_;
     window_ = nullptr;
   });
@@ -69,7 +66,7 @@ void ImageDisplay::SetWindow(ImageDisplayQtWindow* window) {
 
 bool ImageDisplay::IsOpen() {
   bool result = false;
-  QtThread::Instance()->RunInQtThreadBlocking([&](){
+  RunInQtThreadBlocking([&](){
     if (window_ && window_->isVisible()) {
       result = true;
     }

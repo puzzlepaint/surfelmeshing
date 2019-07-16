@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -31,11 +31,27 @@
 
 #include <memory>
 
-#include "libvis/opengl.h"
-
 namespace vis {
 
-struct OpenGLContextImpl;
+class OpenGLContextImpl {
+ public:
+  virtual ~OpenGLContextImpl() = default;
+  
+  virtual bool InitializeWindowless(OpenGLContextImpl* sharing_context = nullptr) = 0;
+  
+  // Deinitializes the context.
+  virtual void Deinitialize() = 0;
+  
+  // Attaches the context which is current to this thread to this object. You
+  // may have to call Detach() manually after this to prevent deletion of the
+  // context once this object is destructed.
+  virtual void AttachToCurrent() = 0;
+  
+  // Makes this context current in this thread and stores the old context in
+  // old_context (if given).
+  virtual void MakeCurrent() = 0;
+};
+
 
 class OpenGLContext {
  public:
@@ -53,8 +69,8 @@ class OpenGLContext {
   ~OpenGLContext();
   
   
-  // Initializes a windowless context. Call SwitchOpenGLContext() afterwards to make it
-  // current.
+  // Initializes a windowless context. Call SwitchOpenGLContext() afterwards to
+  // make it current.
   // 
   // \param sharing_context A context to share names with, or nullptr.
   // 
@@ -63,7 +79,6 @@ class OpenGLContext {
   
   // Deinitializes the context.
   void Deinitialize();
-  
   
   // Attaches the context which is current to this thread to this object. You
   // may have to call Detach() manually after this to prevent deletion of the
@@ -74,19 +89,24 @@ class OpenGLContext {
   // with care.
   void Detach();
   
+  // Makes this context current in this thread and stores the old context in
+  // old_context (if given).
+  void MakeCurrent(OpenGLContext* old_context = nullptr);
+  
   
   std::unique_ptr<OpenGLContextImpl> impl;
 };
 
 
 // Switches the current thread's OpenGL context to the given context, and
-// returns the previously active context. One context can be current to only
-// one thread at a time. Notice that this function creates a new OpenGLContext
-// from the current one, which by default will get deinitialized once the
-// OpenGLContext object is destructed. If this is undesired, call Detach() on
-// the returned object. In case no context is current when this function is
-// called, the returned object will represent no context and thus Detach() is
-// unnecessary.
-OpenGLContext SwitchOpenGLContext(const OpenGLContext& context);
+// returns the previously active context in old_context if it is non-null. One
+// context can be current to only one thread at a time. Notice that this
+// function creates a new OpenGLContext from the current one if old_context is
+// given, which by default will get deinitialized once the OpenGLContext object
+// is destructed. If this is undesired, call Detach() on the returned object.
+// In case no context is current when this function is called, the returned
+// object will represent no context and thus Detach() is unnecessary.
+void SwitchOpenGLContext(OpenGLContext& new_context,
+                         OpenGLContext* old_context = nullptr);
 
 }  // namespace vis

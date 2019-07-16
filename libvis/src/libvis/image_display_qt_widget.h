@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -30,45 +30,65 @@
 #pragma once
 
 #include <memory>
+#include <string>
 
 #include <QImage>
 #include <QWidget>
 
+#include "libvis/any_image.h"
+#include "libvis/image.h"
 #include "libvis/libvis.h"
 #include "libvis/window_callbacks.h"
 
 namespace vis {
+
+class ImageDisplayQtWindow;
 
 // Qt widget for image display.
 class ImageDisplayQtWidget : public QWidget
 {
  Q_OBJECT
  public:
-  ImageDisplayQtWidget(QWidget* parent = nullptr);
+  ImageDisplayQtWidget(ImageDisplayQtWindow* window, QWidget* parent = nullptr);
 //   ImageDisplayQtWidget(const QImage& image, const shared_ptr<ImageWindowCallbacks>& callbacks, QWidget* parent = nullptr);
   ~ImageDisplayQtWidget();
   
   // Sets the image displayed by the widget.
-  void SetImage(const QImage& image);
+  template <typename T>
+  void SetImage(const Image<T>& image) {
+    image_ = image;
+    UpdateQImage();
+    UpdateViewTransforms();
+    update(rect());
+  }
+  
   void SetCallbacks(const shared_ptr<ImageWindowCallbacks>& callbacks);
   void SetViewOffset(double x, double y);
   void SetZoomFactor(double zoom_factor);
+  void ZoomAt(int x, int y, double target_zoom);
+  void FitContent(bool update_display = true);
   
   void AddSubpixelDotPixelCornerConv(float x, float y, u8 r, u8 g, u8 b);
   void AddSubpixelLinePixelCornerConv(float x0, float y0, float x1, float y1, u8 r, u8 g, u8 b);
+  void AddSubpixelTextPixelCornerConv(float x, float y, u8 r, u8 g, u8 b, const string& text);
   void Clear();
+  
+  // Creates the QImage from the AnyImage, applying any transformations on the
+  // image content (such as brightness / contrast changes) using the current
+  // display settings.
+  void UpdateQImage();
   
   virtual QSize sizeHint() const override;
   
   inline double zoom_factor() const { return view_scale_; }
-  inline const QImage& image() const { return image_; }
+  inline const QImage& image() const { return qimage_; }
   
   inline const QTransform& image_to_viewport() const { return image_to_viewport_; }
   inline const QTransform& viewport_to_image() const { return viewport_to_image_; }
 
  signals:
   // (0, 0) is at the top-left corner of the image here.
-  void CursorPositionChanged(QPointF pos, bool pixel_value_valid, QRgb pixel_value);
+  void CursorPositionChanged(QPointF pos, bool pixel_value_valid, std::string pixel_value, QRgb pixel_displayed_value);
   
   void ZoomChanged(double zoom);
 
@@ -92,6 +112,12 @@ class ImageDisplayQtWidget : public QWidget
     QPointF xy0;
     QPointF xy1;
     QRgb rgb;
+  };
+  
+  struct SubpixelText {
+    QPointF xy;
+    QRgb rgb;
+    QString text;
   };
   
   void UpdateViewTransforms();
@@ -119,10 +145,14 @@ class ImageDisplayQtWidget : public QWidget
   
   vector<SubpixelDot> dots_;
   vector<SubpixelLine> lines_;
+  vector<SubpixelText> texts_;
   
   shared_ptr<ImageWindowCallbacks> callbacks_;
   
-  QImage image_;
+  AnyImage image_;
+  QImage qimage_;
+  
+  ImageDisplayQtWindow* window_;
 };
 
 }

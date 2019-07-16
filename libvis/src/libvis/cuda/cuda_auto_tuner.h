@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -33,7 +33,7 @@
 #include <memory>
 #include <unordered_map>
 
-#include <glog/logging.h>
+#include "libvis/logging.h"
 
 #include "libvis/cuda/cuda_util.h"
 #include "libvis/libvis.h"
@@ -50,15 +50,20 @@ public:
     return singleton_instance;
   }
   
+  inline int tuning_iteration() const {
+    return tuning_iteration_;
+  }
+  
   // iteration must be in [0, 6].
   inline void SetTuningIteration(int iteration) {
     tuning_iteration_ = iteration;
   }
   
   void GetParametersForKernel(const char* kernel_name, int dimensions,
+                              int tuning_iteration,
                               int default_block_width, int default_block_height,
                               int* out_block_width, int* out_block_height) {
-    if (tuning_iteration_ == -1) {
+    if (tuning_iteration == -1) {
       // Using the final or default values.
       KernelParameters* parameters;
       
@@ -84,14 +89,18 @@ public:
       }
     } else {
       // Using the values of the current tuning iteration.
+      // NOTE: These values must be ordered from small to large, since if a
+      //       configuration turns out not to work due to too many resources
+      //       requested, values at smaller indices will be tried (and it should
+      //       be ensured that a working configuration can be found).
       if (dimensions == 1) {
         const int tuning_values[] = {32, 64, 128, 256, 512, 1024, 1024};
-        *out_block_width = tuning_values[tuning_iteration_];
+        *out_block_width = tuning_values[tuning_iteration];
       } else if (dimensions == 2) {
         const int tuning_values_width[] = {8, 16, 8, 16, 32, 16, 32};
         const int tuning_values_height[] = {8, 8, 16, 16, 16, 32, 32};
-        *out_block_width = tuning_values_width[tuning_iteration_];
-        *out_block_height = tuning_values_height[tuning_iteration_];
+        *out_block_width = tuning_values_width[tuning_iteration];
+        *out_block_height = tuning_values_height[tuning_iteration];
       }
     }
   }
@@ -188,14 +197,10 @@ private:
   };
   
   
-  inline CUDAAutoTuner() {
-    tuning_iteration_ = -1;
-  }
-  
   unordered_map<const char*, shared_ptr<KernelParameters>> parameter_map_1_;
   unordered_map<string, shared_ptr<KernelParameters>> parameter_map_2_;
   
-  int tuning_iteration_;
+  int tuning_iteration_ = -1;
 };
 
 // NOTE: The following macros use static and are not thread-safe for tuning.
@@ -204,8 +209,8 @@ private:
 //       to get any speed benefit from the tuning; it seems that the overhead
 //       of GetParametersForKernel() was too large otherwise.
 
-// Version of CUDA_AUTO_TUNE_2D() accounting for border values that must be
-// excluded from the grid size calculation.
+// Version of CUDA_AUTO_TUNE_2D() accounting for border sizes that must be
+// subtracted from each block for the grid size calculation.
 #define CUDA_AUTO_TUNE_2D_BORDER( \
     kernel_name, \
     default_block_width, default_block_height, \
@@ -214,14 +219,18 @@ private:
     shared_memory_size, stream, \
     ...) \
     do { \
+    vis::CUDAAutoTuner& tuner = vis::CUDAAutoTuner::Instance(); \
+    static bool block_size_works = !tuner.tuning_active(); \
+    do { \
       static const char* const_kernel_name = #kernel_name; \
+      static int tuning_iteration = tuner.tuning_iteration(); \
       static cudaEvent_t tuning_pre_event = 0; \
       static cudaEvent_t tuning_post_event = 0; \
-      vis::CUDAAutoTuner& tuner = vis::CUDAAutoTuner::Instance(); \
       static int var_block_width = 0; \
       static int var_block_height = 0; \
       if (var_block_width == 0) { \
         tuner.GetParametersForKernel(const_kernel_name, 2, \
+                                     tuning_iteration, \
                                      default_block_width, default_block_height, \
                                      &var_block_width, &var_block_height); \
       } \
@@ -233,6 +242,7 @@ private:
         if (tuning_pre_event == 0) { \
           cudaEventCreate(&tuning_pre_event); \
           cudaEventCreate(&tuning_post_event); \
+          cudaGetLastError(); \
         } \
         cudaEventRecord(tuning_pre_event, stream); \
       } \
@@ -244,12 +254,24 @@ private:
         cudaEventRecord(tuning_post_event, stream); \
         cudaEventSynchronize(tuning_post_event); \
         \
+        if (!block_size_works) { \
+          cudaError_t last_error = cudaGetLastError(); \
+          if (last_error == cudaErrorLaunchOutOfResources || last_error == cudaErrorInvalidConfiguration) { \
+            -- tuning_iteration; \
+            var_block_width = 0; \
+            CHECK_GE(tuning_iteration, 0) << "CUDA auto tuner: Could not find any working configuration for this kernel."; \
+            continue; \
+          } \
+          block_size_works = true; \
+        } \
+        \
         float elapsed_milliseconds; \
         cudaEventElapsedTime(&elapsed_milliseconds, tuning_pre_event, tuning_post_event); \
         tuner.AddTuningMeasurement(const_kernel_name, \
                                    var_block_width, var_block_height, \
                                    0.001 * elapsed_milliseconds); \
       } \
+    } while (!block_size_works); \
     } while (false)
 
 // The kernel name must be given directly (not as a string). Template parameters
@@ -291,14 +313,18 @@ private:
     template_parameters, \
     ...) \
     do { \
+    vis::CUDAAutoTuner& tuner = vis::CUDAAutoTuner::Instance(); \
+    static bool block_size_works = !tuner.tuning_active(); \
+    do { \
       static const char* const_kernel_name = #kernel_name; \
+      static int tuning_iteration = tuner.tuning_iteration(); \
       static cudaEvent_t tuning_pre_event; \
       static cudaEvent_t tuning_post_event; \
-      vis::CUDAAutoTuner& tuner = vis::CUDAAutoTuner::Instance(); \
       static int var_block_width = 0; \
       static int var_block_height = 0; \
       if (var_block_width == 0) { \
         tuner.GetParametersForKernel(const_kernel_name, 2, \
+                                     tuning_iteration, \
                                      default_block_width, default_block_height, \
                                      &var_block_width, &var_block_height); \
       } \
@@ -310,6 +336,7 @@ private:
         if (tuning_pre_event == 0) { \
           cudaEventCreate(&tuning_pre_event); \
           cudaEventCreate(&tuning_post_event); \
+          cudaGetLastError(); \
         } \
         cudaEventRecord(tuning_pre_event, stream); \
       } \
@@ -371,12 +398,24 @@ private:
         cudaEventRecord(tuning_post_event, stream); \
         cudaEventSynchronize(tuning_post_event); \
         \
+        if (!block_size_works) { \
+          cudaError_t last_error = cudaGetLastError(); \
+          if (last_error == cudaErrorLaunchOutOfResources || last_error == cudaErrorInvalidConfiguration) { \
+            -- tuning_iteration; \
+            var_block_width = 0; \
+            CHECK_GE(tuning_iteration, 0) << "CUDA auto tuner: Could not find any working configuration for this kernel."; \
+            continue; \
+          } \
+          block_size_works = true; \
+        } \
+        \
         float elapsed_milliseconds; \
         cudaEventElapsedTime(&elapsed_milliseconds, tuning_pre_event, tuning_post_event); \
         tuner.AddTuningMeasurement(const_kernel_name, \
                                    var_block_width, var_block_height, \
                                    0.001 * elapsed_milliseconds); \
       } \
+    } while (!block_size_works); \
     } while (false)
 
 #define CUDA_AUTO_TUNE_2D_TEMPLATED( \
@@ -412,14 +451,18 @@ private:
     shared_memory_size, stream, \
     ...) \
     do { \
+    vis::CUDAAutoTuner& tuner = vis::CUDAAutoTuner::Instance(); \
+    static bool block_size_works = !tuner.tuning_active(); \
+    do { \
       static const char* const_kernel_name = #kernel_name; \
+      static int tuning_iteration = tuner.tuning_iteration(); \
       static cudaEvent_t tuning_pre_event; \
       static cudaEvent_t tuning_post_event; \
-      vis::CUDAAutoTuner& tuner = vis::CUDAAutoTuner::Instance(); \
       static int var_block_width = 0; \
       if (var_block_width == 0) { \
         tuner.GetParametersForKernel(const_kernel_name, 1, \
-                                     default_block_width, 0, \
+                                     tuning_iteration, \
+                                     default_block_width, 1, \
                                      &var_block_width, nullptr); \
       } \
       dim3 grid_dim(GetBlockCount(domain_width, var_block_width)); \
@@ -429,6 +472,7 @@ private:
         if (tuning_pre_event == 0) { \
           cudaEventCreate(&tuning_pre_event); \
           cudaEventCreate(&tuning_post_event); \
+          cudaGetLastError(); \
         } \
         cudaEventRecord(tuning_pre_event, stream); \
       } \
@@ -440,12 +484,24 @@ private:
         cudaEventRecord(tuning_post_event, stream); \
         cudaEventSynchronize(tuning_post_event); \
         \
+        if (!block_size_works) { \
+          cudaError_t last_error = cudaGetLastError(); \
+          if (last_error == cudaErrorLaunchOutOfResources || last_error == cudaErrorInvalidConfiguration) { \
+            -- tuning_iteration; \
+            var_block_width = 0; \
+            CHECK_GE(tuning_iteration, 0) << "CUDA auto tuner: Could not find any working configuration for this kernel."; \
+            continue; \
+          } \
+          block_size_works = true; \
+        } \
+        \
         float elapsed_milliseconds; \
         cudaEventElapsedTime(&elapsed_milliseconds, tuning_pre_event, tuning_post_event); \
         tuner.AddTuningMeasurement(const_kernel_name, \
-                                   var_block_width, 0, \
+                                   var_block_width, 1, \
                                    0.001 * elapsed_milliseconds); \
       } \
+    } while (!block_size_works); \
     } while (false)
 
 // The kernel name must be given directly (not as a string).
@@ -466,14 +522,18 @@ private:
     template_parameters, \
     ...) \
     do { \
+    vis::CUDAAutoTuner& tuner = vis::CUDAAutoTuner::Instance(); \
+    static bool block_size_works = !tuner.tuning_active(); \
+    do { \
       static const char* const_kernel_name = #kernel_name; \
+      static int tuning_iteration = tuner.tuning_iteration(); \
       static cudaEvent_t tuning_pre_event; \
       static cudaEvent_t tuning_post_event; \
-      vis::CUDAAutoTuner& tuner = vis::CUDAAutoTuner::Instance(); \
       static int var_block_width = 0; \
       if (var_block_width == 0) { \
         tuner.GetParametersForKernel(const_kernel_name, 1, \
-                                     default_block_width, 0, \
+                                     tuning_iteration, \
+                                     default_block_width, 1, \
                                      &var_block_width, nullptr); \
       } \
       dim3 grid_dim(GetBlockCount(domain_width, var_block_width)); \
@@ -483,6 +543,7 @@ private:
         if (tuning_pre_event == 0) { \
           cudaEventCreate(&tuning_pre_event); \
           cudaEventCreate(&tuning_post_event); \
+          cudaGetLastError(); \
         } \
         cudaEventRecord(tuning_pre_event, stream); \
       } \
@@ -525,12 +586,24 @@ private:
         cudaEventRecord(tuning_post_event, stream); \
         cudaEventSynchronize(tuning_post_event); \
         \
+        if (!block_size_works) { \
+          cudaError_t last_error = cudaGetLastError(); \
+          if (last_error == cudaErrorLaunchOutOfResources || last_error == cudaErrorInvalidConfiguration) { \
+            -- tuning_iteration; \
+            var_block_width = 0; \
+            CHECK_GE(tuning_iteration, 0) << "CUDA auto tuner: Could not find any working configuration for this kernel."; \
+            continue; \
+          } \
+          block_size_works = true; \
+        } \
+        \
         float elapsed_milliseconds; \
         cudaEventElapsedTime(&elapsed_milliseconds, tuning_pre_event, tuning_post_event); \
         tuner.AddTuningMeasurement(const_kernel_name, \
-                                   var_block_width, 0, \
+                                   var_block_width, 1, \
                                    0.001 * elapsed_milliseconds); \
       } \
+    } while (!block_size_works); \
     } while (false)
 
 // Helper to pass template arguments as a single macro parameter

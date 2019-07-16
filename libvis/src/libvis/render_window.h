@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -35,6 +35,10 @@
 #include "libvis/libvis.h"
 #include "libvis/window_callbacks.h"
 
+#ifdef WIN32
+#undef CreateWindow
+#endif
+
 namespace vis {
 
 class RenderWindow;
@@ -49,6 +53,8 @@ class RenderWindow {
     kOpenGL,
     kVulkan
   };
+  
+  virtual inline ~RenderWindow() {}
   
   // Returns false once the window has been closed by the user.
   virtual bool IsOpen() = 0;

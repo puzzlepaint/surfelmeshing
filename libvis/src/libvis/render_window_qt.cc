@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -44,9 +44,9 @@ RenderWindowQtWindow::RenderWindowQtWindow(int width, int height, QWidget* paren
   QDesktopWidget* desktop = QApplication::desktop();
   QRect available_rect = desktop->availableGeometry(desktop->primaryScreen());
   
-  if (width >= 0 && height >= 0) {
+  if (width > 0 && height > 0) {
     resize(width, height);
-  } else {
+  } else if (width == 0 && height == 0) {
     // HACK: Hardcoded maximum values for the window frame size. This can be hard
     // to get prior to showing any window:
     // http://stackoverflow.com/questions/7408082/how-to-get-the-width-of-a-window-frame-before-creating-any-windows
@@ -74,19 +74,50 @@ RenderWindowQtWindow::RenderWindowQtWindow(int width, int height, QWidget* paren
   // TODO: Allow users to add their own widgets next to the render widget.
 }
 
-RenderWindowQt::RenderWindowQt(const std::string& title, int width, int height, const shared_ptr<RenderWindowCallbacks>& callbacks)
-    : RenderWindow(callbacks) {
-  QtThread::Instance()->WaitForStartup();
-  QtThread::Instance()->RunInQtThreadBlocking([&](){
+RenderWindowQt::RenderWindowQt(
+    const std::string& title,
+    int width,
+    int height,
+    const shared_ptr<RenderWindowCallbacks>& callbacks,
+    bool use_qt_thread,
+    bool show)
+    : RenderWindow(callbacks),
+      use_qt_thread_(use_qt_thread) {
+  auto init_function = [&](){
     window_ = new RenderWindowQtWindow(width, height);
     window_->setWindowTitle(QString::fromStdString(title));
-    window_->show();
-  });
+    if (show) {
+      window_->show();
+    }
+  };
+  
+  if (use_qt_thread_) {
+    RunInQtThreadBlocking(init_function);
+  } else {
+    init_function();
+  }
+}
+
+RenderWindowQt::~RenderWindowQt() {
+  auto delete_function = [&](){
+    window_->deleteLater();
+    window_ = nullptr;
+  };
+  
+  if (use_qt_thread_) {
+    RunInQtThreadBlocking(delete_function);
+  } else {
+    delete_function();
+  }
 }
 
 bool RenderWindowQt::IsOpen() {
+  if (!use_qt_thread_) {
+    return window_->isVisible();
+  }
+  
   atomic<bool> is_open;
-  QtThread::Instance()->RunInQtThreadBlocking([&](){
+  RunInQtThreadBlocking([&](){
     is_open = window_->isVisible();
   });
   return is_open;

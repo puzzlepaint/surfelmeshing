@@ -173,7 +173,11 @@ set(LIBVIS_FILES
   libvis/src/libvis/camera_frustum_opengl.h
   libvis/src/libvis/command_line_parser.cc
   libvis/src/libvis/command_line_parser.h
+  libvis/src/libvis/dlt.h
   libvis/src/libvis/eigen.h
+  libvis/src/libvis/geometry.h
+  libvis/src/libvis/glew.cc
+  libvis/src/libvis/glew.h
   libvis/src/libvis/image.cc
   libvis/src/libvis/image.h
   libvis/src/libvis/image_cache.h
@@ -196,12 +200,18 @@ set(LIBVIS_FILES
   libvis/src/libvis/libvis.h
   libvis/src/libvis/lm_optimizer.h
   libvis/src/libvis/lm_optimizer_impl.h
+  libvis/src/libvis/lm_optimizer_update_accumulator.h
+  libvis/src/libvis/loss_functions.h
   libvis/src/libvis/mesh.h
   libvis/src/libvis/mesh_opengl.h
   libvis/src/libvis/opengl.cc
   libvis/src/libvis/opengl.h
   libvis/src/libvis/opengl_context.cc
   libvis/src/libvis/opengl_context.h
+  libvis/src/libvis/opengl_context_glx.cc
+  libvis/src/libvis/opengl_context_glx.h
+  libvis/src/libvis/opengl_context_qt.cc
+  libvis/src/libvis/opengl_context_qt.h
   libvis/src/libvis/patch_match_stereo.cc
   libvis/src/libvis/patch_match_stereo.h
   libvis/src/libvis/point_cloud.h
@@ -226,6 +236,7 @@ set(LIBVIS_FILES
   libvis/src/libvis/statistics.h
   libvis/src/libvis/timing.cc
   libvis/src/libvis/timing.h
+  libvis/src/libvis/util.h
   
   ${GENERATED_HEADERS}
   libvis/resources/resources.qrc
@@ -279,10 +290,15 @@ cuda_add_library(libvis_cuda SHARED
   libvis/src/libvis/cuda/cuda_buffer.h
   libvis/src/libvis/cuda/cuda_buffer_inl.h
   libvis/src/libvis/cuda/cuda_matrix.cuh
-  libvis/src/libvis/cuda/cuda_unprojection_lookup.cu
   libvis/src/libvis/cuda/cuda_unprojection_lookup.cuh
   libvis/src/libvis/cuda/cuda_unprojection_lookup.h
   libvis/src/libvis/cuda/cuda_util.h
+  libvis/src/libvis/cuda/patch_match_stereo.cc
+  libvis/src/libvis/cuda/patch_match_stereo.cu
+  libvis/src/libvis/cuda/patch_match_stereo.cuh
+  libvis/src/libvis/cuda/patch_match_stereo.h
+  libvis/src/libvis/cuda/pixel_corner_projector.cuh
+  libvis/src/libvis/cuda/pixel_corner_projector.h
 )
 target_link_libraries(libvis_cuda
   libvis

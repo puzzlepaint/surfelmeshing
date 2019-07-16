@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -31,7 +31,6 @@
 
 #include <cuda_runtime.h>
 
-#include "libvis/eigen.h"
 #include "libvis/libvis.h"
 
 namespace vis {
@@ -39,8 +38,8 @@ namespace vis {
 struct CUDAMatrix3x3 {
   __forceinline__ __host__ __device__ CUDAMatrix3x3() {}
   
-  template <typename Derived> __host__ explicit
-  CUDAMatrix3x3(const Eigen::MatrixBase<Derived>& matrix) {
+  template <typename T> __host__ explicit
+  CUDAMatrix3x3(const T& matrix) {
     row0.x = matrix(0, 0);
     row0.y = matrix(0, 1);
     row0.z = matrix(0, 2);
@@ -68,8 +67,8 @@ struct CUDAMatrix3x3 {
 struct CUDAMatrix3x4 {
   __forceinline__ __host__ __device__ CUDAMatrix3x4() {}
   
-  template <typename Derived> __host__ explicit
-  CUDAMatrix3x4(const Eigen::MatrixBase<Derived>& matrix) {
+  template <typename T> __host__ explicit
+  CUDAMatrix3x4(const T& matrix) {
     row0.x = matrix(0, 0);
     row0.y = matrix(0, 1);
     row0.z = matrix(0, 2);

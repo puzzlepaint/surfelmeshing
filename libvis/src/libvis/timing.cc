@@ -1,4 +1,4 @@
-// Copyright 2011-2013 Paul Furgale and others, 2018 ETH Zürich, Thomas Schöps
+// Copyright 2011-2013 Paul Furgale and others, 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -29,13 +29,22 @@
 
 #include "libvis/timing.h"
 
+#include <algorithm>
 #include <limits>
-#include <math.h>
 #include <map>
+#include <math.h>
 
-#include <glog/logging.h>
+#include "libvis/logging.h"
 
 namespace vis {
+
+Timer::Timer(bool construct_stopped)
+    : timing_(false),
+      handle_(numeric_limits<usize>::max()) {
+  if (!construct_stopped) {
+    Start();
+  }
+}
 
 Timer::Timer(usize handle, bool construct_stopped)
     : timing_(false),
@@ -46,6 +55,14 @@ Timer::Timer(usize handle, bool construct_stopped)
 }
 
 Timer::Timer(const string& tag, bool construct_stopped)
+    : timing_(false),
+      handle_(Timing::getHandle(tag)) {
+  if (!construct_stopped) {
+    Start();
+  }
+}
+
+Timer::Timer(const char* tag, bool construct_stopped)
     : timing_(false),
       handle_(Timing::getHandle(tag)) {
   if (!construct_stopped) {
@@ -67,12 +84,18 @@ void Timer::Start() {
 }
 
 double Timer::Stop(bool add_to_statistics) {
-  chrono::steady_clock::time_point now = chrono::steady_clock::now();
-  double seconds = 1e-9 * chrono::duration<double, nano>(now - start_time_).count();
-  if (add_to_statistics) {
+  double seconds = GetTimeSinceStart();
+  if (add_to_statistics && handle_ != numeric_limits<usize>::max()) {
     Timing::addTime(handle_, seconds);
   }
   timing_ = false;
+  return seconds;
+}
+
+double Timer::GetTimeSinceStart() {
+  CHECK(timing_) << "GetTimeSinceStart() called on a stopped timer";
+  chrono::steady_clock::time_point now = chrono::steady_clock::now();
+  double seconds = 1e-9 * chrono::duration<double, nano>(now - start_time_).count();
   return seconds;
 }
 
@@ -143,7 +166,7 @@ usize Timing::getHandle(string const& tag){
     instance().m_tagMap[tag] = handle;
     instance().m_timers.push_back(TimerMapValue());
     // Track the maximum tag length to help printing a table of timing values later.
-    instance().m_maxTagLength = max(instance().m_maxTagLength, tag.size());
+    instance().m_maxTagLength = std::max(instance().m_maxTagLength, tag.size());
     return handle;
   } else {
     return i->second;

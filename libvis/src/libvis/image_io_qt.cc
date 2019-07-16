@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -31,7 +31,7 @@
 
 #include "libvis/image_io_qt.h"
 
-#include <glog/logging.h>
+#include "libvis/logging.h"
 #include <QImageReader>
 #include <QImageWriter>
 #include <QString>
@@ -86,7 +86,7 @@ bool ImageIOQt::Read(const std::string& image_file_name,
   
   image->SetSize(qimage.width(), qimage.height());
   for (u32 y = 0; y < image->height(); ++ y) {
-    memcpy(image->row(y), qimage.scanLine(y), image->width() * sizeof(Vec3u8));
+    memcpy(static_cast<void*>(image->row(y)), qimage.scanLine(y), image->width() * sizeof(Vec3u8));
   }
   return true;
 }
@@ -105,7 +105,7 @@ bool ImageIOQt::Read(const std::string& image_file_name,
   
   image->SetSize(qimage.width(), qimage.height());
   for (u32 y = 0; y < image->height(); ++ y) {
-    memcpy(image->row(y), qimage.scanLine(y), image->width() * sizeof(Vec4u8));
+    memcpy(static_cast<void*>(image->row(y)), qimage.scanLine(y), image->width() * sizeof(Vec4u8));
   }
   return true;
 }
@@ -114,7 +114,14 @@ bool ImageIOQt::Write(const std::string& image_file_name,
                       const Image<u8>& image) const {
   QImage qImage = image.WrapInQImage();
   QImageWriter writer(QString::fromStdString(image_file_name));
-  writer.setQuality(100);  // TODO: This is for maximum-quality JPEGs. Make configurable.
+  ImageFormat format = TryToDetermineImageFormat(image_file_name);
+  if (format == ImageFormat::kPNG) {
+    // This will effectively enable compression (without affecting the quality, which is always lossless).
+    // See: https://bugreports.qt.io/browse/QTBUG-43618
+    writer.setQuality(0);
+  } else {
+    writer.setQuality(100);  // TODO: This is for maximum-quality JPEGs. Make configurable.
+  }
   return writer.write(qImage);
 }
 
@@ -128,7 +135,14 @@ bool ImageIOQt::Write(const std::string& image_file_name,
                       const Image<Vec3u8>& image) const {
   QImage qImage = image.WrapInQImage();
   QImageWriter writer(QString::fromStdString(image_file_name));
-  writer.setQuality(100);  // TODO: This is for maximum-quality JPEGs. Make configurable.
+  ImageFormat format = TryToDetermineImageFormat(image_file_name);
+  if (format == ImageFormat::kPNG) {
+    // This will effectively enable compression (without affecting the quality, which is always lossless).
+    // See: https://bugreports.qt.io/browse/QTBUG-43618
+    writer.setQuality(0);
+  } else {
+    writer.setQuality(100);  // TODO: This is for maximum-quality JPEGs. Make configurable.
+  }
   return writer.write(qImage);
 }
 
@@ -136,7 +150,14 @@ bool ImageIOQt::Write(const std::string& image_file_name,
                       const Image<Vec4u8>& image) const {
   QImage qImage = image.WrapInQImage();
   QImageWriter writer(QString::fromStdString(image_file_name));
-  writer.setQuality(100);  // TODO: This is for maximum-quality JPEGs. Make configurable.
+  ImageFormat format = TryToDetermineImageFormat(image_file_name);
+  if (format == ImageFormat::kPNG) {
+    // This will effectively enable compression (without affecting the quality, which is always lossless).
+    // See: https://bugreports.qt.io/browse/QTBUG-43618
+    writer.setQuality(0);
+  } else {
+    writer.setQuality(100);  // TODO: This is for maximum-quality JPEGs. Make configurable.
+  }
   return writer.write(qImage);
 }
 

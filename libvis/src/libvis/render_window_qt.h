@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -56,13 +56,25 @@ class RenderWindowQtWindow : public QMainWindow {
 // Vulkan based.
 class RenderWindowQt : public RenderWindow {
  public:
-  RenderWindowQt(const std::string& title, int width, int height, const shared_ptr<RenderWindowCallbacks>& callbacks);
+  // Constructor, shows the window.
+  RenderWindowQt(const std::string& title, int width, int height,
+                 const shared_ptr<RenderWindowCallbacks>& callbacks,
+                 bool use_qt_thread = true, bool show = true);
   
+  // Destructor, closes the window.
+  ~RenderWindowQt();
+  
+  // Returns whether the window is (still) shown, or it has been closed by the
+  // user.
   virtual bool IsOpen() override;
+  
+  inline RenderWindowQtWindow* window() { return window_; }
+  inline const RenderWindowQtWindow* window() const { return window_; }
 
  protected:
+  bool use_qt_thread_;
+  
   // Pointer managed by Qt.
-  // TODO: According to valgrind it seems that this is leaked on exit.
   RenderWindowQtWindow* window_;
 };
 

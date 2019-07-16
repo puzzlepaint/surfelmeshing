@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -29,8 +29,8 @@
 
 #include "libvis/image_io_libpng.h"
 
-#include <glog/logging.h>
-#include <libpng/png.h>
+#include "libvis/logging.h"
+#include <libpng/png.h> // TODO: Using the "libpng/" prefix is required on my Ubuntu 14.04 system to get a recent version of libpng. Remove this once not required anymore, since it might prevent finding the header at all!
 
 #include "libvis/image.h"
 
@@ -212,12 +212,14 @@ bool ImageIOLibPng::ReadImpl(
     png_set_gray_to_rgb(png_ptr);
     png_set_add_alpha(png_ptr, 0xFF, PNG_FILLER_AFTER);
   } else if (output_channels == 1 && channel_count == 3) {
-    LOG(WARNING) << "ImageIOLibPng: implicitly converting an RGB image to grayscale on read";
+    // LOG(WARNING) << "ImageIOLibPng: implicitly converting an RGB image to grayscale on read";
+    
     // error_action == 1: No warning if the image is not actually grayscale.
     // Negative weights result in default weights being used.
     png_set_rgb_to_gray(png_ptr, /*error_action*/ 1, -1, -1);
   } else if (output_channels == 1 && channel_count == 4) {
-    LOG(WARNING) << "ImageIOLibPng: implicitly converting an RGBA image to grayscale on read";
+    // LOG(WARNING) << "ImageIOLibPng: implicitly converting an RGBA image to grayscale on read";
+    
     png_set_strip_alpha(png_ptr);
     // error_action == 1: No warning if the image is not actually grayscale.
     // Negative weights result in default weights being used.

@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -37,7 +37,7 @@ namespace vis {
 constexpr float kMinInvDepth = 1e-5f;  // TODO: Make parameter
 
 template <class CameraT>
-__forceinline__ __device__ float SampleAtProjectedPosition(
+inline float SampleAtProjectedPosition(
     const float x, const float y, const float z,
     const int stereo_width,
     const int stereo_height,
@@ -63,13 +63,13 @@ __forceinline__ __device__ float SampleAtProjectedPosition(
 }
 
 
-__forceinline__ __device__ float CalculatePlaneDepth2(
+inline float CalculatePlaneDepth2(
     float d, const Vec2f& normal_xy, float normal_z,
     float query_x, float query_y) {
   return d / (query_x * normal_xy.x() + query_y * normal_xy.y() + normal_z);
 }
 
-__forceinline__ __device__ float CalculatePlaneInvDepth2(
+inline float CalculatePlaneInvDepth2(
     float d, const Vec2f& normal_xy, float normal_z,
     float query_x, float query_y) {
   return (query_x * normal_xy.x() + query_y * normal_xy.y() + normal_z) / d;
@@ -129,7 +129,7 @@ inline float ComputeCostsSSD(
 
 // Computes 0.5f * (1 - ZNCC), so that the result can be used
 // as a cost value with range [0; 1].
-__forceinline__ __device__ float ComputeZNCCBasedCost(
+inline float ComputeZNCCBasedCost(
     const int context_radius,
     const float sum_a,
     const float squared_sum_a,
@@ -371,7 +371,7 @@ PatchMatchStereoCPU::PatchMatchStereoCPU(int /*width*/, int /*height*/) {}
 // typedef float Scalar;
 // 
 // // opcount = 243
-// __forceinline__ __device__ void ComputeResidualAndJacobian(
+// inline void ComputeResidualAndJacobian(
 //     Scalar cx, Scalar cy, Scalar fx, Scalar fy,
 //     Scalar inv_depth, Scalar n_x, Scalar n_y,
 //     Scalar nx, Scalar ny,
@@ -481,7 +481,7 @@ void PatchMatchStereoCPU::ComputeDepthMap(
     const Image<u8>& stereo_image,
     const SE3f& stereo_image_tr_global,
     Image<float>* inv_depth_map) {
-  CHOOSE_CAMERA_TEMPLATE2(
+  IDENTIFY_CAMERA2(
       reference_camera,
       stereo_camera,
       ComputeDepthMap_(
@@ -617,7 +617,7 @@ void PatchMatchStereoCPU::ComputeDepthMap_(
             context_radius_,
             match_metric_);
         
-        if (!::isnan(proposal_costs) && !(proposal_costs >= costs(x, y))) {
+        if (!std::isnan(proposal_costs) && !(proposal_costs >= costs(x, y))) {
           costs(x, y) = proposal_costs;
           normals(x, y) = proposed_normal;
           (*inv_depth_map)(x, y) = proposed_inv_depth;
@@ -752,7 +752,7 @@ void PatchMatchStereoCPU::ComputeDepthMap_(
             Vec2f other_nxy = reference_camera.UnprojectFromPixelCenterConv(Vec2i(x + dx, y + dy)).template cast<float>().template topRows<2>();
             
             float other_inv_depth = (*inv_depth_map)(x + dx, y + dy);
-            if (::isnan(other_inv_depth)) {
+            if (std::isnan(other_inv_depth)) {
               continue;
             }
             float other_depth = 1.f / other_inv_depth;
@@ -779,7 +779,7 @@ void PatchMatchStereoCPU::ComputeDepthMap_(
                 context_radius_,
                 match_metric_);
             
-            if (!::isnan(proposal_costs) && !(proposal_costs >= costs(x, y))) {
+            if (!std::isnan(proposal_costs) && !(proposal_costs >= costs(x, y))) {
               costs(x, y) = proposal_costs;
               normals(x, y) = other_normal_xy;
               (*inv_depth_map)(x, y) = inv_depth;
@@ -814,7 +814,7 @@ void PatchMatchStereoCPU::ComputeDepthMap_(
 //     
 //     shared_ptr<Point3fCu8Cloud> cloud(new Point3fCu8Cloud());
 //     inv_depth_map_->DownloadAsync(0, inv_depth_map);
-//     CHOOSE_CAMERA_TEMPLATE(reference_camera,
+//     IDENTIFY_CAMERA(reference_camera,
 //         cloud->SetFromRGBDImage(*inv_depth_map, true, 0.f, reference_image, _reference_camera));
 //     
 //     render_display->SetUpDirection(Vec3f(0, 0, 1));

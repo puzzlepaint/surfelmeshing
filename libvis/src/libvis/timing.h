@@ -1,4 +1,4 @@
-// Copyright 2011-2013 Paul Furgale and others, 2018 ETH Zürich, Thomas Schöps
+// Copyright 2011-2013 Paul Furgale and others, 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -39,14 +39,49 @@
 
 namespace vis {
 
+/// Measures the elapsed time between starting and stopping the timer. Measures
+/// real (wall clock) time, as opposed to for example processor time.
+/// TODO: Regarding the API, would it be more intuitive to have "start" as a
+///       parameter of the constructors instead of "construct_stopped"?
+///       --> One would pass true to start the timer, false to not start it.
 class Timer {
  public:
+  /// Constructs a timer. By default, it is started immediately.
+  Timer(bool construct_stopped = false);
+  
+  /// Constructs a timer assigned to a handle. The handle is used to compile
+  /// statistics of timers with the same handle. It must be obtained from the
+  /// Timing singleton instance. The statistics can then also be obtained from
+  /// that singleton. By default, the timer is started immediately.
   Timer(usize handle, bool construct_stopped = false);
+  
+  /// Constructs a timer assigned to the handle identified by the given tag.
+  /// The handle is used to compile statistics of timers with the same handle.
+  /// The statistics can then be obtained from the Timing singleton instance.
+  /// By default, the timer is started immediately.
   Timer(const string& tag, bool construct_stopped = false);
+  
+  /// Constructs a timer assigned to the handle identified by the given tag.
+  /// The handle is used to compile statistics of timers with the same handle.
+  /// The statistics can then be obtained from the Timing singleton instance.
+  /// By default, the timer is started immediately.
+  Timer(const char* tag, bool construct_stopped = false);
+  
+  /// Destructor. Stops the timer if it has not been stopped by manually calling
+  /// Stop() yet.
   ~Timer();
   
+  /// Starts the timer. Can only be called if the timer is not currently running.
   void Start();
+  
+  /// Stops the timer. Returns the elapsed time since the start in seconds.
   double Stop(bool add_to_statistics = true);
+  
+  /// Returns the elapsed time since the start in seconds, but unlike Stop(),
+  /// does not stop the timer.
+  double GetTimeSinceStart();
+  
+  /// Returns whether the timer is currently running.
   inline bool IsTiming() const { return timing_; };
 
  private:

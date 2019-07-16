@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -41,7 +41,7 @@ namespace vis {
 template<typename T, typename PoseType>
 class ImageFrame : public ImageCache<T> {
  public:
-  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW  // TODO: Only required if PoseType requires alignment
   
   typedef ImageCache<T> Base;
   

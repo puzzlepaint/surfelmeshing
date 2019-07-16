@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -39,21 +39,30 @@
 
 namespace vis {
 
+// Represents a triangle in a mesh.
 template <typename IndexT>
 class Triangle {
  public:
+  // Constructor which leaves the members uninitialized.
   inline Triangle() {}
   
+  // Constructor which initializes the members.
   inline Triangle(IndexT i0, IndexT i1, IndexT i2)
       : indices_{i0, i1, i2} {}
   
+  // Checks whether the triangle equals the triangle defined by the given
+  // indices, possibly after rotating the indices (e.g, (1,2,3) may become
+  // (2,3,1)), but while keeping the same (clockwise or counter-clockwise)
+  // ordering.
   inline bool EqualsRotated(IndexT a, IndexT b, IndexT c) {
     return (indices_[0] == a && indices_[1] == b && indices_[2] == c) ||
            (indices_[0] == b && indices_[1] == c && indices_[2] == a) ||
            (indices_[0] == c && indices_[1] == a && indices_[2] == b);
   }
   
+  // Provides read-write access to index i.
   inline IndexT& index(int i) { return indices_[i]; }
+  // Provides read access to index i.
   inline IndexT index(int i) const { return indices_[i]; }
   
  private:

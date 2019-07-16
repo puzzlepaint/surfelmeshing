@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -27,7 +27,6 @@
 // POSSIBILITY OF SUCH DAMAGE.
 
 
-#include <glog/logging.h>
 #include <gtest/gtest.h>
 
 #include "libvis/point_cloud.h"
@@ -81,4 +80,44 @@ TEST(PointCloud, TransformSE3) {
     EXPECT_FLOAT_EQ(expected_result[i].position().z(),
                     actual_result[i].position().z());
   }
+}
+
+TEST(PointCloud, Save) {
+  // Position-only cloud
+  Point3fCloud position_cloud(2);
+  position_cloud[0] = Point3f(Vec3f(1, 2, 3));
+  position_cloud[1] = Point3f(Vec3f(2, 3, 4));
+  
+  std::ofstream obj_file1("/tmp/__position_cloud_test.obj", std::ios::out);  // TODO: use random temporary filename
+  position_cloud.WriteAsOBJ(&obj_file1);
+  obj_file1.close();
+  
+  position_cloud.WriteAsPLY("/tmp/__position_cloud_test.ply");
+  
+  
+  // Position-and-color cloud
+  Point3fC3u8Cloud position_color_cloud(2);
+  position_color_cloud[0] = Point3fC3u8(Vec3f(1, 2, 3), Vec3u8(255, 0, 0));
+  position_color_cloud[1] = Point3fC3u8(Vec3f(2, 3, 4), Vec3u8(0, 255, 0));
+  
+  std::ofstream obj_file2("/tmp/__position_color_cloud_test.obj", std::ios::out);  // TODO: use random temporary filename
+  position_color_cloud.WriteAsOBJ(&obj_file2);
+  obj_file2.close();
+  
+  position_color_cloud.WriteAsPLY("/tmp/__position_color_cloud_test.ply");
+  
+  
+  // Position-color-normal cloud
+  Point3fC3u8NfCloud position_color_normal_cloud(2);
+  position_color_normal_cloud[0] = Point3fC3u8Nf(Vec3f(1, 2, 3), Vec3u8(255, 0, 0), Vec3f(2, 5, 7).normalized());
+  position_color_normal_cloud[1] = Point3fC3u8Nf(Vec3f(2, 3, 4), Vec3u8(0, 255, 0), Vec3f(8, 9, 10).normalized());
+  
+  std::ofstream obj_file3("/tmp/__position_color_normal_cloud_test.obj", std::ios::out);  // TODO: use random temporary filename
+  position_color_normal_cloud.WriteAsOBJ(&obj_file3);
+  obj_file3.close();
+  
+  position_color_normal_cloud.WriteAsPLY("/tmp/__position_color_normal_cloud_test.ply");
+  
+  
+  // TODO: Extend this test to load the saved files again and ensure that the results are equal to the original clouds
 }

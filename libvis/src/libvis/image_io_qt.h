@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -64,19 +64,19 @@ class ImageIOQt : public ImageIO {
     QList<QByteArray> read_formats = QImageReader::supportedImageFormats();
     QList<QByteArray> write_formats = QImageWriter::supportedImageFormats();
     
-    for (const QByteArray& format : format_strings) {
+    for (const QByteArray& qformat : format_strings) {
       bool have_read_support = false;
       bool have_write_support = false;
       
       for (const QByteArray& read_format : read_formats) {
-        if (read_format == format) {
+        if (read_format == qformat) {
           have_read_support = true;
           break;
         }
       }
       
       for (const QByteArray& write_format : write_formats) {
-        if (write_format == format) {
+        if (write_format == qformat) {
           have_write_support = true;
           break;
         }

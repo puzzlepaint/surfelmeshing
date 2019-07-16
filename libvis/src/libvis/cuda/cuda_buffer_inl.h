@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -97,12 +97,11 @@ void CUDABuffer<T>::UploadPitchedAsync(cudaStream_t stream, size_t pitch,
 template <typename T>
 void CUDABuffer<T>::UploadPartAsync(size_t start, size_t length,
                                     cudaStream_t stream, const T* data) {
-  CHECK_EQ(data_.height_, 1);
   CHECK_NOTNULL(data);
   CUDA_CHECKED_CALL(cudaMemcpy2DAsync(
       static_cast<void*>(reinterpret_cast<int8_t*>(data_.address_) + start),
       data_.pitch_, static_cast<const void*>(data), data_.width_ * sizeof(T),
-      length, data_.height_, cudaMemcpyHostToDevice, stream));
+      length, 1, cudaMemcpyHostToDevice, stream));
 }
 
 template <typename T>
@@ -151,7 +150,6 @@ void CUDABuffer<T>::DownloadAsync(cudaStream_t stream, Image<T>* data) const {
 template <typename T>
 void CUDABuffer<T>::DownloadPartAsync(size_t start, size_t length,
                                       cudaStream_t stream, T* data) const {
-  // CHECK_EQ(data_.height_, 1);
   CHECK_NOTNULL(data);
   CUDA_CHECKED_CALL(cudaMemcpy2DAsync(
       static_cast<void*>(data), data_.width_ * sizeof(T),

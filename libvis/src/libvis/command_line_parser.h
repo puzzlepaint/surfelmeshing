@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -36,6 +36,35 @@
 
 namespace vis {
 
+// Utility class for command line argument parsing.
+// 
+// Example use:
+// 
+// int main(int argc, char** argv) {
+//   CommandLineParser parser(argc, argv);
+//   
+//   int int_param = 5;  // defaults to 5
+//   parser.NamedParameter("--int_param", &int_param, /*required*/ false, "Help text about int_param");
+//   
+//   bool flag_given = parser.Flag(
+//       "--flag_name", "Help text about the flag");
+//   
+//   // Sequential parameters must be defined after all NamedParameters and Flags.
+//   
+//   string str_param;
+//   parser.SequentialParameter(&str_param, /*Name for help display*/ "str_param", /*required*/ true, "Help text");
+//   
+//   if (!parser.CheckParameters()) {
+//     return 1;
+//   }
+//   
+//   // Use the parameters ...
+//   // NB: Parameter values are assigned directly, so they can be used after their
+//   //     NamedParameter() / Flag() / etc. call. NamedParameter() and SequentialParameter()
+//   //     return true if the value is present and thus the parameter was assigned.
+//   //     This may for example be used to base a default value for one parameter
+//   //     on the value of another.
+// }
 class CommandLineParser {
  public:
   // Constructor, does nothing. The values are not copied and therefore must
@@ -54,6 +83,18 @@ class CommandLineParser {
   
   // Reads a named parameter. Returns true if it was present and thus the value
   // was assigned. If not required, the value parameter must contain a default value.
+  bool NamedParameter(const char* name, vector<string>* value, char separator = ',', bool required = false, const char* help = "");
+  
+  // Reads a named parameter. Returns true if it was present and thus the value
+  // was assigned. If not required, the value parameter must contain a default value.
+  // 
+  // If the given path starts with "file://", this prefix is removed. This makes
+  // it simpler to copy file paths into program arguments in environments where
+  // paths are prefixed by this when copied.
+  bool NamedPathParameter(const char* name, string* value, bool required = false, const char* help = "");
+  
+  // Reads a named parameter. Returns true if it was present and thus the value
+  // was assigned. If not required, the value parameter must contain a default value.
   bool NamedParameter(const char* name, int* value, bool required = false, const char* help = "");
   
   // Reads a named parameter. Returns true if it was present and thus the value
@@ -64,6 +105,15 @@ class CommandLineParser {
   // value was assigned. Sequential parameters must be read after all named
   // parameters. If not required, the value parameter must contain a default value.
   bool SequentialParameter(string* value, const char* name = "", bool required = false, const char* help = "");
+  
+  // Reads a sequential parameter. Returns true if it was present and thus the
+  // value was assigned. Sequential parameters must be read after all named
+  // parameters. If not required, the value parameter must contain a default value.
+  // 
+  // If the given path starts with "file://", this prefix is removed. This makes
+  // it simpler to copy file paths into program arguments in environments where
+  // paths are prefixed by this when copied.
+  bool SequentialPathParameter(string* value, const char* name = "", bool required = false, const char* help = "");
   
   // Returns whether at least one of -h or --help is given in the input.
   bool HelpRequested() const;
@@ -99,6 +149,7 @@ class CommandLineParser {
   
   bool is_input_complete_;
   bool help_requested_;
+  bool sequential_parameter_read_;
   
   vector<bool> value_used_;
   

@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -79,10 +79,12 @@ class PointCloudOpenGL {
   };
   
   // Destroys the point cloud. Attention: Requires a current OpenGL context for
-  // this thread! You may need to explicitly delete this object at a point where
-  // such a context still exists.
+  // this thread! You may need to explicitly delete this object at a point in
+  // your program's control flow before exiting where such a context still exists.
   ~PointCloudOpenGL() {
-    glDeleteBuffers(1, &point_buffer_);
+    if (buffer_allocated_) {
+      glDeleteBuffers(1, &point_buffer_);
+    }
   }
   
   // Allocates the point buffer on the GPU (but does not initialize it). If the

@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -56,7 +56,7 @@ class CameraFrustum {
   
   // Creates a frustum for the given camera.
   inline void Create(const Camera& camera, float min_depth, float max_depth, const SE3f& global_T_camera) {
-    CHOOSE_CAMERA_TEMPLATE(camera, _Create(_camera, min_depth, max_depth, global_T_camera));
+    IDENTIFY_CAMERA(camera, _Create(_camera, min_depth, max_depth, global_T_camera));
   }
   
   // Tests whether the bounding box of the frustum intersects the bounding box

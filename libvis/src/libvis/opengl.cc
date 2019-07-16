@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -29,7 +29,11 @@
 
 #include "libvis/opengl.h"
 
+#ifdef WIN32
+#include <windows.h>
+#else
 #include <GL/glx.h>
+#endif
 
 namespace vis {
 
@@ -78,7 +82,11 @@ std::string GetGLErrorDescription(GLenum error_code) {
 }
 
 bool IsOpenGLContextAvailable() {
+#ifdef WIN32
+  return (wglGetCurrentContext() != nullptr);
+#else
   return (glXGetCurrentContext() != nullptr);
+#endif
 }
 
 }

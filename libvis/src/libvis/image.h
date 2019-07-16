@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -31,10 +31,14 @@
 
 #include <memory>
 
-#include <glog/logging.h>
+#ifdef LIBVIS_HAVE_OPENCV
+  #include <opencv2/core/core.hpp>
+#endif
+
+#include "libvis/logging.h"
 
 #include "libvis/eigen.h"
-#include "libvis/image_display_qt_window.h"
+// #include "libvis/image_display_qt_window.h"
 #include "libvis/image_io_libpng.h"
 #include "libvis/image_io_netpbm.h"
 #include "libvis/image_io_qt.h"
@@ -60,18 +64,196 @@ struct always_false {
 // Eigen::Matrix type and then return its element count.
 template<typename T>
 struct channel_count_helper {
-  inline u32 channel_count() const {
+  constexpr inline u32 channel_count() const {
     return 1;
   }
 };
 
 template<typename _Scalar, int _Rows, int _Cols, int _Options, int _MaxRows, int _MaxCols>
 struct channel_count_helper<Matrix<_Scalar, _Rows, _Cols, _Options, _MaxRows, _MaxCols>> {
-  inline u32 channel_count() const {
+  constexpr inline u32 channel_count() const {
     static_assert(_Rows >= 0 && _Cols >= 0, "Matrices of dynamic size are not supported.");
     return _Rows * _Cols;
   }
 };
+
+// Implementation helper which suggests a default interpolation result type for image interpolation.
+template<typename T>
+struct float_type_helper {
+  typedef float Type;
+};
+
+template<typename _Scalar, int _Rows, int _Cols, int _Options, int _MaxRows, int _MaxCols>
+struct float_type_helper<Matrix<_Scalar, _Rows, _Cols, _Options, _MaxRows, _MaxCols>> {
+  typedef Matrix<float, _Rows, _Cols, _Options, _MaxRows, _MaxCols> Type;
+};
+
+// Implementation helpers for Image::SetTo(), which requires a different
+// implementation for Eigen::Matrix types.
+template <typename T>
+inline void SetImageTo(Image<T>* image, const T value) {
+  // Use (hopefully fast) memset() implementation if possible. The checks are
+  // not exhaustive but should cover the most important cases.
+  if (sizeof(T) == 1) {
+    memset(image->data(), value, image->height() * image->stride());
+  } else if (value == static_cast<T>(0)) {
+    memset(image->data(), 0, image->height() * image->stride());
+  } else {
+    for (u32 y = 0; y < image->height(); ++ y) {
+      T* write_ptr = image->row(y);
+      T* end = write_ptr + image->width();
+      while (write_ptr < end) {
+        *write_ptr = value;
+        ++ write_ptr;
+      }
+    }
+  }
+}
+
+template<typename _Scalar, int _Rows, int _Cols, int _Options, int _MaxRows, int _MaxCols>
+inline void SetImageTo(Image<Matrix<_Scalar, _Rows, _Cols, _Options, _MaxRows, _MaxCols>>* image,
+                       const Matrix<_Scalar, _Rows, _Cols, _Options, _MaxRows, _MaxCols> value) {
+  typedef Matrix<_Scalar, _Rows, _Cols, _Options, _MaxRows, _MaxCols> T;
+  for (u32 y = 0; y < image->height(); ++ y) {
+    T* write_ptr = image->row(y);
+    T* end = write_ptr + image->width();
+    while (write_ptr < end) {
+      *write_ptr = value;
+      ++ write_ptr;
+    }
+  }
+}
+
+// Implementation helpers for Image::InterpolateBilinear(), which requires a different
+// implementation for Eigen::Matrix types and scalar types.
+template <typename InterpolatedT, typename T, typename Derived>
+inline InterpolatedT InterpolateImageBilinear(
+  const Image<T>* image,
+  const MatrixBase<Derived>& position) {
+  int ix = static_cast<int>(position.coeff(0));
+  int iy = static_cast<int>(position.coeff(1));
+  
+  float fx = position.coeff(0) - ix;
+  float fy = position.coeff(1) - iy;
+  float fx_inv = 1.f - fx;
+  float fy_inv = 1.f - fy;
+  
+  const T* ptr = reinterpret_cast<const T*>(
+      reinterpret_cast<const uint8_t*>(image->data()) + iy * image->stride()) + ix;
+  const T* ptr2 = reinterpret_cast<const T*>(
+      reinterpret_cast<const uint8_t*>(ptr) + image->stride());
+  
+  return fx_inv * fy_inv * static_cast<InterpolatedT>(*ptr) +
+         fx * fy_inv * static_cast<InterpolatedT>(*(ptr + 1)) +
+         fx_inv * fy * static_cast<InterpolatedT>(*ptr2) +
+         fx * fy * static_cast<InterpolatedT>(*(ptr2 + 1));
+}
+
+template <typename InterpolatedT, typename _Scalar, int _Rows, int _Cols, int _Options, int _MaxRows, int _MaxCols, typename Derived>
+inline InterpolatedT InterpolateImageBilinear(
+    const Image<Matrix<_Scalar, _Rows, _Cols, _Options, _MaxRows, _MaxCols>>* image,
+    const MatrixBase<Derived>& position) {
+  typedef Matrix<_Scalar, _Rows, _Cols, _Options, _MaxRows, _MaxCols> T;
+  
+  int ix = static_cast<int>(position.coeff(0));
+  int iy = static_cast<int>(position.coeff(1));
+  
+  float fx = position.coeff(0) - ix;
+  float fy = position.coeff(1) - iy;
+  float fx_inv = 1.f - fx;
+  float fy_inv = 1.f - fy;
+  
+  const T* ptr = reinterpret_cast<const T*>(
+      reinterpret_cast<const uint8_t*>(image->data()) + iy * image->stride()) + ix;
+  const T* ptr2 = reinterpret_cast<const T*>(
+      reinterpret_cast<const uint8_t*>(ptr) + image->stride());
+  
+  return fx_inv * fy_inv * ptr->template cast<typename InterpolatedT::Scalar>() +
+         fx * fy_inv * (ptr + 1)->template cast<typename InterpolatedT::Scalar>() +
+         fx_inv * fy * ptr2->template cast<typename InterpolatedT::Scalar>() +
+         fx * fy * (ptr2 + 1)->template cast<typename InterpolatedT::Scalar>();
+}
+
+
+// Implementation helpers for Image::InterpolateBilinearWithJacobian(), which requires a different
+// implementation for Eigen::Matrix types and scalar types.
+template <typename T, typename InterpolatedT, typename JacobianScalarT, typename Derived>
+inline void InterpolateImageBilinearWithJacobian(
+    const Image<T>* image,
+    const MatrixBase<Derived>& position,
+    InterpolatedT* value,
+    Matrix<JacobianScalarT, 1, 2>* jacobian) {
+  int ix = static_cast<int>(position.coeff(0));
+  int iy = static_cast<int>(position.coeff(1));
+  
+  float fx = position.coeff(0) - ix;
+  float fy = position.coeff(1) - iy;
+  float fx_inv = 1.f - fx;
+  float fy_inv = 1.f - fy;
+  
+  const T* ptr = reinterpret_cast<const T*>(
+      reinterpret_cast<const uint8_t*>(image->data()) + iy * image->stride()) + ix;
+  const T* ptr2 = reinterpret_cast<const T*>(
+      reinterpret_cast<const uint8_t*>(ptr) + image->stride());
+  const T top_left = *ptr;
+  const T top_right = *(ptr + 1);
+  const T bottom_left = *ptr2;
+  const T bottom_right = *(ptr2 + 1);
+  
+  InterpolatedT top = fx_inv * top_left + fx * top_right;
+  InterpolatedT bottom = fx_inv * bottom_left + fx * bottom_right;
+  *value = fy_inv * top + fy * bottom;
+  jacobian->coeffRef(0) = fy * (bottom_right - bottom_left) +
+                          fy_inv * (top_right - top_left);
+  jacobian->coeffRef(1) = bottom - top;
+}
+
+template <typename _Scalar, int _Rows, int _Cols, int _Options, int _MaxRows, int _MaxCols, typename InterpolatedT, typename JacobianScalarT, typename Derived>
+inline void InterpolateImageBilinearWithJacobian(
+    const Image<Matrix<_Scalar, _Rows, _Cols, _Options, _MaxRows, _MaxCols>>* image,
+    const MatrixBase<Derived>& position,
+    InterpolatedT* value,
+    Matrix<JacobianScalarT, _Rows, 2>* jacobian) {  // _Rows == channel_count_helper<Image<Matrix<_Scalar, _Rows, _Cols, _Options, _MaxRows, _MaxCols>>>().channel_count()
+  typedef Matrix<_Scalar, _Rows, _Cols, _Options, _MaxRows, _MaxCols> T;
+  
+  int ix = static_cast<int>(position.coeff(0));
+  int iy = static_cast<int>(position.coeff(1));
+  
+  float fx = position.coeff(0) - ix;
+  float fy = position.coeff(1) - iy;
+  float fx_inv = 1.f - fx;
+  float fy_inv = 1.f - fy;
+  
+  const T* ptr = reinterpret_cast<const T*>(
+      reinterpret_cast<const uint8_t*>(image->data()) + iy * image->stride()) + ix;
+  const T* ptr2 = reinterpret_cast<const T*>(
+      reinterpret_cast<const uint8_t*>(ptr) + image->stride());
+  const T top_left = *ptr;
+  const T top_right = *(ptr + 1);
+  const T bottom_left = *ptr2;
+  const T bottom_right = *(ptr2 + 1);
+  
+  InterpolatedT top = fx_inv * top_left + fx * top_right;
+  InterpolatedT bottom = fx_inv * bottom_left + fx * bottom_right;
+  *value = fy_inv * top + fy * bottom;
+  jacobian->col(0) = (fy * (bottom_right - bottom_left) +
+                      fy_inv * (top_right - top_left)).template cast<JacobianScalarT>();
+  jacobian->col(1) = (bottom - top).template cast<JacobianScalarT>();
+}
+
+
+// Implementation helper which is used to check whether some type is a
+// Eigen::Matrix type and return the underlying scalar type.
+// TODO: Is this useful somewhere? If not, remove.
+// template<typename T>
+// struct get_scalar_type {
+//   typedef T Type;
+// };
+// 
+// template<typename _Scalar, int _Rows, int _Cols, int _Options, int _MaxRows, int _MaxCols>
+// struct get_scalar_type<Matrix<_Scalar, _Rows, _Cols, _Options, _MaxRows, _MaxCols>> {
+//   typedef _Scalar Type;
+// };
 
 // Registration helpers for I/O handlers. They need to be referenced somehow
 // for static initialization to be carried out if this code is in a static
@@ -133,6 +315,8 @@ extern ImageIOQtRegistrator image_io_qt_registrator_;
 //     ...
 //   }
 // 
+// If no stride is specified in the functions to allocate the image, it is
+// chosen such that the data is stored in memory continuously.
 template <typename T>
 class Image {
  public:
@@ -255,6 +439,18 @@ class Image {
     SetTo(other);
   }
   
+  // Creates a deep copy of the other image.
+  Image& operator= (const Image<T>& other) {
+    FreeData();
+    size_ = ImageSize(0, 0);
+    data_ = nullptr;
+    stride_ = 0;
+    alignment_ = 0;
+    SetSizeToMatch(other);
+    SetTo(other);
+    return *this;
+  }
+  
   // Attempts to read the given image file. Use empty() to check whether image
   // loading was successful.
   Image(const string& image_file_path)
@@ -357,8 +553,7 @@ class Image {
   
   // Destructor,
   ~Image() {
-    // Does nothing if data_ is nullptr.
-    free(data_);
+    FreeData();
   }
   
   
@@ -400,33 +595,60 @@ class Image {
       return;
     }
     
-    // Does nothing if data_ is nullptr.
-    free(data_);
+    FreeData();
     data_ = nullptr;
     
-    int return_value;
-    if (alignment == 1) {
-      data_ = reinterpret_cast<T*>(malloc(height * stride));
-      return_value = (data_ == nullptr) ? (-1) : 0;
-    } else {
-      return_value = posix_memalign(reinterpret_cast<void**>(&data_), alignment, height * stride);
-    }
-    if (return_value != 0) {
-      // An error ocurred.
-      if (return_value == EINVAL) {
-        // The alignment argument was not a power of two, or was not a multiple of
-        // sizeof(void*).
-        // TODO
-        LOG(FATAL) << "return_value == EINVAL";
-      } else if (return_value == ENOMEM) {
-        // There was insufficient memory to fulfill the allocation request.
-        // TODO
-        LOG(FATAL) << "return_value == ENOMEM";
+    if (width > 0 || height > 0) {
+      int return_value;
+      if (alignment == 1) {
+        if (stride % sizeof(T) == 0) {
+          data_ = new T[height * stride / sizeof(T)];
+        } else {
+          data_ = reinterpret_cast<T*>(malloc(height * stride));
+        }
+        return_value = (data_ == nullptr) ? (-1) : 0;
       } else {
-        // Unknown error.
-        // TODO
-        LOG(FATAL) << "Unknown error";
+#ifdef WIN32
+        data_ = reinterpret_cast<T*>(_aligned_malloc(height * stride, alignment));
       }
+      if (data_ == nullptr) {
+        // An error ocurred.
+        if (errno == EINVAL) {
+          // The alignment argument was not a power of two, or was not a multiple of
+          // sizeof(void*).
+          // TODO
+          LOG(FATAL) << "return_value == EINVAL";
+        } else if (errno == ENOMEM) {
+          // There was insufficient memory to fulfill the allocation request.
+          // TODO
+          LOG(FATAL) << "return_value == ENOMEM";
+        } else {
+          // Unknown error.
+          // TODO
+          LOG(FATAL) << "Unknown error";
+        }
+      }
+#else
+        return_value = posix_memalign(reinterpret_cast<void**>(&data_), alignment, height * stride);
+      }
+      if (return_value != 0) {
+        // An error ocurred.
+        if (return_value == EINVAL) {
+          // The alignment argument was not a power of two, or was not a multiple of
+          // sizeof(void*).
+          // TODO
+          LOG(FATAL) << "return_value == EINVAL";
+        } else if (return_value == ENOMEM) {
+          // There was insufficient memory to fulfill the allocation request.
+          // TODO
+          LOG(FATAL) << "return_value == ENOMEM";
+        } else {
+          // Unknown error.
+          // TODO
+          LOG(FATAL) << "Unknown error";
+        }
+      }
+#endif // !WIN32
     }
     
     size_ = ImageSize(width, height);
@@ -469,22 +691,7 @@ class Image {
   
   // Sets all image pixels to the given value.
   void SetTo(const T value) {
-    // Use (hopefully fast) memset() implementation if possible. The checks are
-    // not exhaustive but should cover the most important cases.
-    if (sizeof(T) == 1) {
-      memset(data_, value, height() * stride());
-    } else if (value == static_cast<T>(0)) {
-      memset(data_, 0, height() * stride());
-    } else {
-      for (u32 y = 0; y < height(); ++ y) {
-        T* write_ptr = row(y);
-        T* end = write_ptr + width();
-        while (write_ptr < end) {
-          *write_ptr = value;
-          ++ write_ptr;
-        }
-      }
-    }
+    SetImageTo(this, value);
   }
   
   // Copies the data from the given pointer to the image. The data is assumed to
@@ -505,17 +712,35 @@ class Image {
     }
   }
   
+  // Copies the data from the given pointer with the given stride to the image.
+  void SetTo(const T* pointer, u32 stride) {
+    // Use (hopefully fast) memcpy() implementation if possible.
+    if (this->stride() == stride) {
+      memcpy(data_, pointer, height() * stride);
+    } else {
+      T* dest_ptr = data_;
+      const T* src_ptr = pointer;
+      for (u32 y = 0; y < height(); ++ y) {
+        memcpy(dest_ptr, src_ptr, width() * sizeof(T));
+        src_ptr = reinterpret_cast<const T*>(
+            reinterpret_cast<const uint8_t*>(src_ptr) + stride);
+        dest_ptr = reinterpret_cast<T*>(
+            reinterpret_cast<uint8_t*>(dest_ptr) + this->stride());
+      }
+    }
+  }
+  
   // Sets the image content to the content of another image. The images must
   // have the same size.
   void SetTo(const Image<T>& other) {
     // Use (hopefully fast) memcpy() implementation if possible.
     if (stride() == other.stride()) {
-      memcpy(data_, other.data_, height() * stride());
+      memcpy(static_cast<void*>(data_), other.data_, height() * stride());
     } else {
       T* dest_ptr = data_;
       const T* src_ptr = other.data_;
       for (u32 y = 0; y < height(); ++ y) {
-        memcpy(dest_ptr, src_ptr, width() * sizeof(T));
+        memcpy(static_cast<void*>(dest_ptr), src_ptr, width() * sizeof(T));
         src_ptr = reinterpret_cast<const T*>(
             reinterpret_cast<const uint8_t*>(src_ptr) + other.stride());
         dest_ptr = reinterpret_cast<T*>(
@@ -585,7 +810,8 @@ class Image {
   // (0, 0) refers to the center of the top left pixel). Coordinates
   // which are exactly on the right or bottom borders are treated as
   // outside the image.
-  bool ContainsPixelCenterConv(const Vec2f& position) const {
+  template <typename Derived>
+  bool ContainsPixelCenterConv(const MatrixBase<Derived>& position) const {
     return position.x() >= 0 &&
            position.y() >= 0 &&
            position.x() < size_.coeff(0) - 1 &&
@@ -597,32 +823,17 @@ class Image {
   // permitted position is the largest position smaller than (width - 1,
   // height - 1) in both axes. Out-of-bounds accesses are not allowed.
   // The validity of a coordinate can be checked with ContainsPixelCenterConv().
-  template<typename InterpolatedT = float>
-  inline InterpolatedT InterpolateBilinear(const Vec2f& position) const {
-    int ix = static_cast<int>(position.coeff(0));
-    int iy = static_cast<int>(position.coeff(1));
-    
-    float fx = position.coeff(0) - ix;
-    float fy = position.coeff(1) - iy;
-    float fx_inv = 1.f - fx;
-    float fy_inv = 1.f - fy;
-    
-    const T* ptr = reinterpret_cast<const T*>(
-        reinterpret_cast<const uint8_t*>(data_) + iy * stride()) + ix;
-    const T* ptr2 = reinterpret_cast<const T*>(
-        reinterpret_cast<const uint8_t*>(ptr) + stride());
-    
-    return fx_inv * fy_inv * *ptr +
-          fx * fy_inv * *(ptr + 1) +
-          fx_inv * fy * *ptr2 +
-          fx * fy * *(ptr2 + 1);
+  template<typename InterpolatedT = typename float_type_helper<T>::Type, typename Derived>
+  inline InterpolatedT InterpolateBilinear(const MatrixBase<Derived>& position) const {
+    return InterpolateImageBilinear<InterpolatedT>(this, position);
   }
   
   // Returns the derivatives of InterpolateBilinear() at the given position with
   // respect to the x and y component of the lookup position.
-  template<typename InterpolatedT = float>
+  // TODO: As with the other bilinear interpolation functions, make this work for scalar and vector types
+  template<typename InterpolatedT = float, typename Derived>
   inline Matrix<InterpolatedT, 2, 1> InterpolateBilinearJacobian(
-      const Vec2f& position) const {
+      const MatrixBase<Derived>& position) const {
     int ix = static_cast<int>(position.coeff(0));
     int iy = static_cast<int>(position.coeff(1));
     
@@ -641,42 +852,74 @@ class Image {
     const T bottom_right = *(ptr2 + 1);
     
     Matrix<InterpolatedT, 2, 1> jacobian;
-    jacobian.coeff(0) = fy * (bottom_right - bottom_left) +
-                        fy_inv * (top_right - top_left);
-    jacobian.coeff(1) = fx * (bottom_right - top_right) +
-                        fx_inv * (bottom_left - top_left);
+    jacobian.coeffRef(0) = fy * (bottom_right - bottom_left) +
+                           fy_inv * (top_right - top_left);
+    jacobian.coeffRef(1) = fx * (bottom_right - top_right) +
+                           fx_inv * (bottom_left - top_left);
     return jacobian;
   }
   
   // Fast combined variant of InterpolateBilinear() and
   // InterpolateBilinearJacobian().
-  template<typename InterpolatedT = float>
+  template<typename InterpolatedT, typename JacobianScalarT, typename Derived>
   inline void InterpolateBilinearWithJacobian(
-      const Vec2f& position, InterpolatedT* value,
-      Matrix<InterpolatedT, 2, 1>* jacobian) const {
-    int ix = static_cast<int>(position.coeff(0));
-    int iy = static_cast<int>(position.coeff(1));
+      const MatrixBase<Derived>& position,
+      InterpolatedT* value,
+      Matrix<JacobianScalarT, channel_count_helper<T>().channel_count(), 2>* jacobian) const {
+    InterpolateImageBilinearWithJacobian(this, position, value, jacobian);
+  }
+  
+  
+  // TODO: Document. Warn about invalid accesses: valid parameter range for one axis is [1, image_length - 1[ !
+  // TODO: Can this be merged with a scalar version?
+  template<typename InterpolatedT = float, typename Derived>
+  inline Matrix<InterpolatedT, channel_count_helper<T>().channel_count(), 1> InterpolateBicubicVector(const MatrixBase<Derived>& position) const {
+    typedef Matrix<InterpolatedT, channel_count_helper<T>().channel_count(), 1> ResultT;
     
-    float fx = position.coeff(0) - ix;
-    float fy = position.coeff(1) - iy;
-    float fx_inv = 1.f - fx;
-    float fy_inv = 1.f - fy;
+    int ix = std::floor(position.coeff(0));
+    int iy = std::floor(position.coeff(1));
     
-    const T* ptr = reinterpret_cast<const T*>(
-        reinterpret_cast<const uint8_t*>(data_) + iy * stride()) + ix;
-    const T* ptr2 = reinterpret_cast<const T*>(
-        reinterpret_cast<const uint8_t*>(ptr) + stride());
-    const T top_left = *ptr;
-    const T top_right = *(ptr + 1);
-    const T bottom_left = *ptr2;
-    const T bottom_right = *(ptr2 + 1);
+    double fx = position.coeff(0) - ix;
+    double fy = position.coeff(1) - iy;
     
-    InterpolatedT top = fx_inv * top_left + fx * top_right;
-    InterpolatedT bottom = fx_inv * bottom_left + fx * bottom_right;
-    *value = fy_inv * top + fy * bottom;
-    jacobian->coeffRef(0) = fy * (bottom_right - bottom_left) +
-                            fy_inv * (top_right - top_left);
-    jacobian->coeffRef(1) = bottom - top;
+    const T* row_ptr = reinterpret_cast<const T*>(reinterpret_cast<const uint8_t*>(data_) + (iy - 1) * stride()) + (ix - 1);
+    ResultT row0_value = CubicHermiteSplineVector<ResultT, InterpolatedT>(*row_ptr, *(row_ptr + 1), *(row_ptr + 2), *(row_ptr + 3), fx);
+    
+    row_ptr = reinterpret_cast<const T*>(reinterpret_cast<const uint8_t*>(row_ptr) + stride());
+    ResultT row1_value = CubicHermiteSplineVector<ResultT, InterpolatedT>(*row_ptr, *(row_ptr + 1), *(row_ptr + 2), *(row_ptr + 3), fx);
+    
+    row_ptr = reinterpret_cast<const T*>(reinterpret_cast<const uint8_t*>(row_ptr) + stride());
+    ResultT row2_value = CubicHermiteSplineVector<ResultT, InterpolatedT>(*row_ptr, *(row_ptr + 1), *(row_ptr + 2), *(row_ptr + 3), fx);
+    
+    row_ptr = reinterpret_cast<const T*>(reinterpret_cast<const uint8_t*>(row_ptr) + stride());
+    ResultT row3_value = CubicHermiteSplineVector<ResultT, InterpolatedT>(*row_ptr, *(row_ptr + 1), *(row_ptr + 2), *(row_ptr + 3), fx);
+    
+    return CubicHermiteSplineVector<ResultT, InterpolatedT>(row0_value, row1_value, row2_value, row3_value, fy);
+  }
+  
+  template<typename InterpolatedT = float, typename Derived>
+  inline InterpolatedT InterpolateBicubic(const MatrixBase<Derived>& position) const {
+    typedef InterpolatedT ResultT;
+    
+    int ix = std::floor(position.coeff(0));
+    int iy = std::floor(position.coeff(1));
+    
+    double fx = position.coeff(0) - ix;
+    double fy = position.coeff(1) - iy;
+    
+    const T* row_ptr = reinterpret_cast<const T*>(reinterpret_cast<const uint8_t*>(data_) + (iy - 1) * stride()) + (ix - 1);
+    ResultT row0_value = CubicHermiteSpline<ResultT, InterpolatedT>(*row_ptr, *(row_ptr + 1), *(row_ptr + 2), *(row_ptr + 3), fx);
+    
+    row_ptr = reinterpret_cast<const T*>(reinterpret_cast<const uint8_t*>(row_ptr) + stride());
+    ResultT row1_value = CubicHermiteSpline<ResultT, InterpolatedT>(*row_ptr, *(row_ptr + 1), *(row_ptr + 2), *(row_ptr + 3), fx);
+    
+    row_ptr = reinterpret_cast<const T*>(reinterpret_cast<const uint8_t*>(row_ptr) + stride());
+    ResultT row2_value = CubicHermiteSpline<ResultT, InterpolatedT>(*row_ptr, *(row_ptr + 1), *(row_ptr + 2), *(row_ptr + 3), fx);
+    
+    row_ptr = reinterpret_cast<const T*>(reinterpret_cast<const uint8_t*>(row_ptr) + stride());
+    ResultT row3_value = CubicHermiteSpline<ResultT, InterpolatedT>(*row_ptr, *(row_ptr + 1), *(row_ptr + 2), *(row_ptr + 3), fx);
+    
+    return CubicHermiteSpline<ResultT, InterpolatedT>(row0_value, row1_value, row2_value, row3_value, fy);
   }
   
   
@@ -1263,6 +1506,25 @@ class Image {
     }
   }
   
+  // Returns the sum of the values in the rectangle which spans the given
+  // values, including the boundaries (i.e., with left == 2 and right == 3,
+  // the two columns with x == 2 and x == 3 would be included).
+  // The boundary values may be outside of the image. In this case, the outside
+  // parts are simply ignored (i.e., they contribute zero to the sum).
+  T AccessIntegralImage(int left, int top, int right, int bottom) const {
+    int left_m1 = left - 1;
+    int top_m1 = top - 1;
+    int clamped_right = std::min<int>(right, width() - 1);
+    int clamped_bottom = std::min<int>(bottom, height() - 1);
+    
+    u64 top_left_value = (left_m1 < 0 || top_m1 < 0) ? 0 : at(left_m1, top_m1);
+    u64 top_right_value = (top_m1 < 0) ? 0 : at(clamped_right, top_m1);
+    u64 bottom_left_value = (left_m1 < 0) ? 0 : at(left_m1, clamped_bottom);
+    u64 bottom_right_value = at(clamped_right, clamped_bottom);
+    
+    return bottom_right_value - top_right_value - bottom_left_value + top_left_value;
+  }
+  
   
   // Writes the image to a file. Returns true if successful.
   bool Write(const string& /*image_file_name*/) const {
@@ -1305,20 +1567,31 @@ class Image {
                   stride(), format);
   }
 #endif
+
+
+#ifdef LIBVIS_HAVE_OPENCV
+  // TODO: Version of WrapInCVMat() with automatic choice of type
   
-  
-  // Displays the image in a debug window.
-  shared_ptr<ImageDisplay> DebugDisplay(const string& title) const {
-    (void) title;
-    static_assert(always_false<T>::value, "DebugDisplay() is not supported for this image type. u8 and Vec3u8 are supported.");
-    return shared_ptr<ImageDisplay>();
+  // Overload of WrapInCVMat() which allows to specify the OpenCV type to
+  // be used.
+  cv::Mat WrapInCVMat(int type) {
+    return cv::Mat(height(), width(), type, reinterpret_cast<void*>(data()), stride());
   }
+#endif
   
-  // Displays the image in a debug window. Intended for images with scalar
-  // values. Scales the content with an affine brightness transformation such
-  // that white_value is displayed as white and black_value is displayed as
-  // black.
-  shared_ptr<ImageDisplay> DebugDisplay(const string& title, const T& black_value, const T& white_value) const;
+  
+//   // Displays the image in a debug window.
+//   shared_ptr<ImageDisplay> DebugDisplay(const string& title) const {
+//     (void) title;
+//     static_assert(always_false<T>::value, "DebugDisplay() is not supported for this image type. u8 and Vec3u8 are supported.");
+//     return shared_ptr<ImageDisplay>();
+//   }
+//   
+//   // Displays the image in a debug window. Intended for images with scalar
+//   // values. Scales the content with an affine brightness transformation such
+//   // that white_value is displayed as white and black_value is displayed as
+//   // black.
+//   shared_ptr<ImageDisplay> DebugDisplay(const string& title, const T& black_value, const T& white_value) const;
   
   
   // Returns true if the image buffer is invalid.
@@ -1332,6 +1605,9 @@ class Image {
   
   // Returns the image height.
   inline u32 height() const { return size_(1); }
+  
+  // Returns the number of pixels in the image.
+  inline u32 pixel_count() const { return width() * height(); }
   
   // Returns the bytes per pixel.
   inline constexpr u32 bytes_per_pixel() const { return sizeof(T); }
@@ -1355,6 +1631,9 @@ class Image {
   // Returns the alignment in bytes.
   inline usize alignment() const { return alignment_; }
   
+  // Returns whether the data is laid out continuously in memory.
+  inline bool is_data_continuous() const { return stride() == width() * bytes_per_pixel(); }
+  
   // Returns the image buffer (const).
   inline const T* data() const { return data_; }
   
@@ -1374,15 +1653,47 @@ class Image {
   }
   
   // Access to a given pixel (slow!).
-  inline const T& operator()(u32 x, u32 y) const {
+  inline const T& at(u32 x, u32 y) const {
     return *(reinterpret_cast<const T*>(
         reinterpret_cast<const uint8_t*>(data_) + y * stride_) + x);
   }
+  inline const T& operator()(u32 x, u32 y) const {
+    return at(x, y);
+  }
   
   // Access to a given pixel (slow!).
-  inline T& operator()(u32 x, u32 y) {
+  inline T& at(u32 x, u32 y) {
     return *(reinterpret_cast<T*>(
         reinterpret_cast<uint8_t*>(data_) + y * stride_) + x);
+  }
+  inline T& operator()(u32 x, u32 y) {
+    return at(x, y);
+  }
+  
+  // Access to a given pixel using a vector coordinate (slow!).
+  // The coordinate should be integer-valued. Floating-point values are converted
+  // to integers. This means that e.g. (-0.5, 0.9) would access pixel (0, 0).
+  template <typename Derived>
+  inline const T& at(const Eigen::MatrixBase<Derived>& coordinate) const {
+    return *(reinterpret_cast<const T*>(
+        reinterpret_cast<const uint8_t*>(data_) + coordinate.coeff(1) * stride_) + coordinate.coeff(0));
+  }
+  template <typename Derived>
+  inline const T& operator()(const Eigen::MatrixBase<Derived>& coordinate) const {
+    return at(coordinate);
+  }
+  
+  // Access to a given pixel using a vector coordinate (slow!).
+  // The coordinate should be integer-valued. Floating-point values are converted
+  // to integers. This means that e.g. (-0.5, 0.9) would access pixel (0, 0).
+  template <typename Derived>
+  inline T& at(const Eigen::MatrixBase<Derived>& coordinate) {
+    return *(reinterpret_cast<T*>(
+        reinterpret_cast<uint8_t*>(data_) + coordinate.coeff(1) * stride_) + coordinate.coeff(0));
+  }
+  template <typename Derived>
+  inline T& operator()(const Eigen::MatrixBase<Derived>& coordinate) {
+    return at(coordinate);
   }
   
   // Access to a given pixel by sequential index (NOTE: pay attention to the
@@ -1414,6 +1725,34 @@ class Image {
   inline ImagePixels pixels() { return ImagePixels(this); }
   
  private:
+  void FreeData() {
+    // Does nothing if data_ is nullptr.
+    if (stride_ % sizeof(T) == 0) {
+      delete[] data_;
+    } else {
+      free(data_);
+    }
+  }
+  
+  // Helper function for bicubic interpolation.
+  // Computes a Catmull–Rom spline (TODO: change the name to reflect this?)
+  // TODO: Can factor out the 0.5f's
+  template <typename ResultT, typename InterpolatedT>
+  inline ResultT CubicHermiteSplineVector(const T& v0, const T& v1, const T& v2, const T& v3, double frac) const {
+    const ResultT a = 0.5f * (-v0.template cast<InterpolatedT>() + 3.0f * v1.template cast<InterpolatedT>() - 3.0f * v2.template cast<InterpolatedT>() + v3.template cast<InterpolatedT>());
+    const ResultT b = 0.5f * (2.0f * v0.template cast<InterpolatedT>() - 5.0f * v1.template cast<InterpolatedT>() + 4.0f * v2.template cast<InterpolatedT>() - v3.template cast<InterpolatedT>());
+    const ResultT c = 0.5f * (-v0.template cast<InterpolatedT>() + v2.template cast<InterpolatedT>());
+    return v1 + frac * (c + frac * (b + frac * a));
+  }
+  
+  template <typename ResultT, typename InterpolatedT>
+  inline ResultT CubicHermiteSpline(const T& v0, const T& v1, const T& v2, const T& v3, double frac) const {
+    const ResultT a = 0.5f * (-static_cast<InterpolatedT>(v0) + 3.0f * static_cast<InterpolatedT>(v1) - 3.0f * static_cast<InterpolatedT>(v2) + static_cast<InterpolatedT>(v3));
+    const ResultT b = 0.5f * (2.0f * static_cast<InterpolatedT>(v0) - 5.0f * static_cast<InterpolatedT>(v1) + 4.0f * static_cast<InterpolatedT>(v2) - static_cast<InterpolatedT>(v3));
+    const ResultT c = 0.5f * (-static_cast<InterpolatedT>(v0) + static_cast<InterpolatedT>(v2));
+    return v1 + frac * (c + frac * (b + frac * a));
+  }
+  
   ImageSize size_;
   T* data_;
   u32 stride_;
@@ -1448,35 +1787,35 @@ template<>
 QImage Image<Vec4u8>::WrapInQImage() const;
 #endif
 
-// DebugDisplay() template specializations for the supported types.
-template<>
-shared_ptr<ImageDisplay> Image<u8>::DebugDisplay(const string& title) const;
-template<>
-shared_ptr<ImageDisplay> Image<Vec3u8>::DebugDisplay(const string& title) const;
-
-// Defined outside of the Image class since NVCC complained about DebugDisplay()
-// being used before it is specialized.
-template <typename T>
-shared_ptr<ImageDisplay> Image<T>::DebugDisplay(const string& title, const T& black_value, const T& white_value) const {
-  // Convert the image.
-  Image<u8> display_image(width(), height());
-  double scale = 255.999 / (white_value - black_value);
-  double bias = (-255.999 * black_value) / (white_value - black_value);
-  for (u32 y = 0; y < height(); ++ y) {
-    const T* read_ptr = row(y);
-    u8* write_ptr = display_image.row(y);
-    u8* write_end = write_ptr + width();
-    while (write_ptr < write_end) {
-      *write_ptr = std::max<double>(0, std::min<double>(255, scale * (*read_ptr) + bias));
-      ++ write_ptr;
-      ++ read_ptr;
-    }
-  }
-  
-  // Display the converted image.
-  // TODO: Make the "value-under-cursor" display show the original image's values.
-  return display_image.DebugDisplay(title);
-}
+// // DebugDisplay() template specializations for the supported types.
+// template<>
+// shared_ptr<ImageDisplay> Image<u8>::DebugDisplay(const string& title) const;
+// template<>
+// shared_ptr<ImageDisplay> Image<Vec3u8>::DebugDisplay(const string& title) const;
+// 
+// // Defined outside of the Image class since NVCC complained about DebugDisplay()
+// // being used before it is specialized.
+// template <typename T>
+// shared_ptr<ImageDisplay> Image<T>::DebugDisplay(const string& title, const T& black_value, const T& white_value) const {
+//   // Convert the image.
+//   Image<u8> display_image(width(), height());
+//   double scale = 255.999 / (white_value - black_value);
+//   double bias = (-255.999 * black_value) / (white_value - black_value);
+//   for (u32 y = 0; y < height(); ++ y) {
+//     const T* read_ptr = row(y);
+//     u8* write_ptr = display_image.row(y);
+//     u8* write_end = write_ptr + width();
+//     while (write_ptr < write_end) {
+//       *write_ptr = std::max<double>(0, std::min<double>(255, scale * (*read_ptr) + bias));
+//       ++ write_ptr;
+//       ++ read_ptr;
+//     }
+//   }
+//   
+//   // Display the converted image.
+//   // TODO: Make the "value-under-cursor" display show the original image's values.
+//   return display_image.DebugDisplay(title);
+// }
 
 template<> template<typename TargetT> void Image<Vec3u8>::ConvertToGrayscale(Image<TargetT>* target) const {
   target->SetSize(this->width(), this->height());
@@ -1495,5 +1834,9 @@ template<> template<typename TargetT> void Image<Vec3u8>::ConvertToGrayscale(Ima
     }
   }
 }
+
+#ifdef WIN32
+#include "libvis/image_template_specializations.h"
+#endif
 
 }

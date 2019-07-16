@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -27,7 +27,7 @@
 // POSSIBILITY OF SUCH DAMAGE.
 
 
-#include <glog/logging.h>
+#include "libvis/logging.h"
 #include <gtest/gtest.h>
 
 #include "libvis/camera.h"
@@ -51,10 +51,13 @@ void TestUnprojectProjectIsIdentity(const CameraT& test_camera) {
     EXPECT_NEAR(pixel_coordinate.y(), pixel_coordinate_reprojected.y(), kEpsilon);
     
     Matrix<typename CameraT::ScalarT, 2, 1> pixel_coordinate_reprojected_scalar;
-    EXPECT_TRUE(test_camera.ProjectToPixelCenterConvIfVisible(
-        pixel_direction.cast<typename CameraT::ScalarT>(), /*pixel_border*/ 0, &pixel_coordinate_reprojected_scalar));
-    EXPECT_NEAR(pixel_coordinate.x(), pixel_coordinate_reprojected_scalar.x(), kEpsilon);
-    EXPECT_NEAR(pixel_coordinate.y(), pixel_coordinate_reprojected_scalar.y(), kEpsilon);
+    bool is_visible = test_camera.ProjectToPixelCenterConvIfVisible(
+        pixel_direction.cast<typename CameraT::ScalarT>(), /*pixel_border*/ 0, &pixel_coordinate_reprojected_scalar);
+    EXPECT_TRUE(is_visible);
+    if (is_visible) {
+      EXPECT_NEAR(pixel_coordinate.x(), pixel_coordinate_reprojected_scalar.x(), kEpsilon);
+      EXPECT_NEAR(pixel_coordinate.y(), pixel_coordinate_reprojected_scalar.y(), kEpsilon);
+    }
   }
   
   // Pixel corner convention.
@@ -68,10 +71,13 @@ void TestUnprojectProjectIsIdentity(const CameraT& test_camera) {
     EXPECT_NEAR(pixel_coordinate.y(), pixel_coordinate_reprojected.y(), kEpsilon);
     
     Matrix<typename CameraT::ScalarT, 2, 1> pixel_coordinate_reprojected_scalar;
-    EXPECT_TRUE(test_camera.ProjectToPixelCornerConvIfVisible(
-        pixel_direction.cast<typename CameraT::ScalarT>(), /*pixel_border*/ 0, &pixel_coordinate_reprojected_scalar));
-    EXPECT_NEAR(pixel_coordinate.x(), pixel_coordinate_reprojected_scalar.x(), kEpsilon);
-    EXPECT_NEAR(pixel_coordinate.y(), pixel_coordinate_reprojected_scalar.y(), kEpsilon);
+    bool is_visible = test_camera.ProjectToPixelCornerConvIfVisible(
+        pixel_direction.cast<typename CameraT::ScalarT>(), /*pixel_border*/ 0, &pixel_coordinate_reprojected_scalar);
+    EXPECT_TRUE(is_visible);
+    if (is_visible) {
+      EXPECT_NEAR(pixel_coordinate.x(), pixel_coordinate_reprojected_scalar.x(), kEpsilon);
+      EXPECT_NEAR(pixel_coordinate.y(), pixel_coordinate_reprojected_scalar.y(), kEpsilon);
+    }
   }
   
   // Ratio convention.
@@ -85,10 +91,13 @@ void TestUnprojectProjectIsIdentity(const CameraT& test_camera) {
     EXPECT_NEAR(pixel_coordinate.y(), pixel_coordinate_reprojected.y(), kEpsilon);
     
     Matrix<typename CameraT::ScalarT, 2, 1> pixel_coordinate_reprojected_scalar;
-    EXPECT_TRUE(test_camera.ProjectToRatioConvIfVisible(
-        pixel_direction.cast<typename CameraT::ScalarT>(), /*pixel_border*/ 0, &pixel_coordinate_reprojected_scalar));
-    EXPECT_NEAR(pixel_coordinate.x(), pixel_coordinate_reprojected_scalar.x(), kEpsilon);
-    EXPECT_NEAR(pixel_coordinate.y(), pixel_coordinate_reprojected_scalar.y(), kEpsilon);
+    bool is_visible = test_camera.ProjectToRatioConvIfVisible(
+        pixel_direction.cast<typename CameraT::ScalarT>(), /*pixel_border*/ 0, &pixel_coordinate_reprojected_scalar);
+    EXPECT_TRUE(is_visible);
+    if (is_visible) {
+      EXPECT_NEAR(pixel_coordinate.x(), pixel_coordinate_reprojected_scalar.x(), kEpsilon);
+      EXPECT_NEAR(pixel_coordinate.y(), pixel_coordinate_reprojected_scalar.y(), kEpsilon);
+    }
   }
 }
 

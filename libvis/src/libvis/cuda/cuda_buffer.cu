@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -121,9 +121,8 @@ void CUDABuffer_<T>::SetTo(const CUDABuffer_<T>& other, cudaStream_t stream) {
   CUDABufferSetToKernel<<<grid_dim, block_dim, 0, stream>>>(*this, other);
 }
 
-// Avoid compilation of SetTo() for type curandState (which does not work as
-// there is no suited tex2D() overload) by declaring but not defining a
-// specialization for it.
+// Avoid compilation of some functions for some types by declaring but not
+// defining a specialization for it.
 template<> void CUDABuffer_<curandState>::SetTo(cudaTextureObject_t texture, cudaStream_t stream);
 template<> void CUDABuffer_<curandState>::SetToReadModeNormalized(cudaTextureObject_t texture, cudaStream_t stream);
 
@@ -143,8 +142,6 @@ template<> void CUDABuffer_<double>::SetToReadModeNormalized(cudaTextureObject_t
 // The alternative would be to move above functions to an inl header,
 // but then all files including cuda_buffer.h (and thus this inl header)
 // would need to be compiled by nvcc.
-// The float3 / int3 variants do not compile as corresponding tex2D<>()
-// variants are missing for the SetTo() kernel.
 template class CUDABuffer_<float>;
 template class CUDABuffer_<float2>;
 template class CUDABuffer_<double>;

@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -29,172 +29,96 @@
 
 #include "libvis/qt_thread.h"
 
+#include <atomic>
+#include <condition_variable>
 #include <functional>
 #include <iostream>
+#include <mutex>
+#include <thread>
 
 #include <QApplication>
-#include <QObject>
+#include <QThread>
 #include <QTimer>
+
+#include "libvis/logging.h"
 
 namespace vis {
 
-struct QtThreadSignalEmitter : public QObject {
- Q_OBJECT
- public:
-  void Emit() {
-    emit RunFunctionQueueSignal();
-  }
-  
- signals:
-  void RunFunctionQueueSignal();
-};
-
-struct QtThreadFunctionQueueRunner : public QObject {
- Q_OBJECT
- public slots:
-  void RunFunctionQueueSlot() {
-    function<void()> f;
-    
-    while (true) {
-      unique_lock<mutex> lock(function_queue_mutex_);
-      if (function_queue_.empty()) {
-        lock.unlock();
-        function_queue_empty_condition_.notify_all();
-        return;
-      }
-      f = function_queue_[0];
-      lock.unlock();
-      
-      f();
-      
-      lock.lock();
-      // NOTE: It is important to only delete the function from the queue once
-      //       it has been executed. Otherwise, WaitForFunctionQueue() might
-      //       assume that the queue is completed when the last function has
-      //       been removed from the queue but was not executed yet.
-      function_queue_.erase(function_queue_.begin());
-      lock.unlock();
-    }
-  }
-
- public:
-  mutex function_queue_mutex_;
-  condition_variable function_queue_empty_condition_;
-  vector<function<void()>> function_queue_;
-};
-
-
-QtThread::QtThread() {
-  startup_done_ = false;
-  qapplication_exit_called_ = false;
-  quit_done_ = false;
-  qt_thread_.reset(new thread(std::bind(&QtThread::Run, this)));
-}
-
-QtThread::~QtThread() {
-  if (!quit_done_) {
-    std::cout << "Error: QtThread::Quit() must be called before it is destructed!" << std::endl;
-  }
-}
-
-void QtThread::WaitForStartup() {
-  unique_lock<mutex> lock(startup_mutex_);
-  while (!startup_done_) {
-    startup_condition_.wait(lock);
-  }
-  lock.unlock();
-}
-
-void QtThread::RunInQtThread(const function<void()>& f) {
-  if (qapplication_exit_called_) {
+// Runs the function in the Qt thread. Does not wait for it to complete.
+void RunInQtThread(const function<void()>& f) {
+  if (!qApp) {
+    LOG(ERROR) << "RunInQtThread(): No qApp exists. Not running the function.";
     return;
   }
-  
-  if (std::this_thread::get_id() == qt_thread_->get_id()) {
-    // RunInQtThread() is called from the QT thread. Call the function directly.
+  if (QThread::currentThread() == qApp->thread()) {
     f();
-  } else {
-    WaitForStartup();
-    
-    unique_lock<mutex> lock(function_queue_runner_->function_queue_mutex_);
-    function_queue_runner_->function_queue_.emplace_back(f);
-    lock.unlock();
-    
-    // Invoke a queued connection to run the slot in the QApplication thread.
-    QtThreadSignalEmitter emitter;
-    QObject::connect(
-        &emitter, SIGNAL(RunFunctionQueueSignal()),
-        function_queue_runner_.get(), SLOT(RunFunctionQueueSlot()),
-        Qt::QueuedConnection);
-    emitter.Emit();
-    emitter.disconnect();
-  }
-}
-
-void QtThread::RunInQtThreadBlocking(const function<void()>& f) {
-  if (qapplication_exit_called_) {
     return;
-  }
+  }  
   
-  if (std::this_thread::get_id() == qt_thread_->get_id()) {
-    // RunInQtThreadBlocking() is called from the QT thread. Call the function directly.
+  QTimer* timer = new QTimer();
+  timer->moveToThread(qApp->thread());
+  timer->setSingleShot(true);
+  QObject::connect(timer, &QTimer::timeout, [=]() {
     f();
-  } else {
-    RunInQtThread(f);
-    WaitForFunctionQueue();
-  }
-}
-
-void QtThread::Quit() {
-  WaitForStartup();
-  
-  RunInQtThreadBlocking([&](){
-    qapplication_exit_called_ = true;
-    QApplication::exit();
+    timer->deleteLater();
   });
-  
-  unique_lock<mutex> quit_lock(quit_mutex_);
-  while (!quit_done_) {
-    quit_condition_.wait(quit_lock);
-  }
-  quit_lock.unlock();
-  
-  qt_thread_->join();
+  QMetaObject::invokeMethod(timer, "start", Qt::QueuedConnection, Q_ARG(int, 0));
 }
 
-void QtThread::Run() {
-  int argc = 0;
-  QApplication qapp(argc, nullptr);
+// Runs the function in the Qt thread. Blocks until it completes.
+void RunInQtThreadBlocking(const function<void()>& f) {
+  if (!qApp) {
+    LOG(ERROR) << "RunInQtThreadBlocking(): No qApp exists. Not running the function.";
+    return;
+  }
+  if (QThread::currentThread() == qApp->thread()) {
+    f();
+    return;
+  }
+  
+  mutex done_mutex;
+  condition_variable done_condition;
+  atomic<bool> done;
+  done = false;
+  
+  QTimer* timer = new QTimer();
+  timer->moveToThread(qApp->thread());
+  timer->setSingleShot(true);
+  QObject::connect(timer, &QTimer::timeout, [&]() {
+    f();
+    timer->deleteLater();
+    
+    lock_guard<mutex> lock(done_mutex);
+    done = true;
+    done_condition.notify_all();
+  });
+  QMetaObject::invokeMethod(timer, "start", Qt::QueuedConnection, Q_ARG(int, 0));
+  
+  unique_lock<mutex> lock(done_mutex);
+  while (!done) {
+    done_condition.wait(lock);
+  }
+}
+
+int WrapQtEventLoopAround(function<int (int, char**)> func, int argc, char** argv) {
+  QApplication qapp(argc, argv);
   qapp.setQuitOnLastWindowClosed(false);
   
-  function_queue_runner_.reset(new QtThreadFunctionQueueRunner());
+  // Start the actual application in its own thread
+  int return_value = 1;
+  thread app_thread([&]{
+    return_value = func(argc, argv);
+    RunInQtThreadBlocking([&]() {
+      qapp.closeAllWindows();
+    });
+    qapp.quit();
+  });
   
-  unique_lock<mutex> startup_lock(startup_mutex_);
-  startup_done_ = true;
-  startup_lock.unlock();
-  startup_condition_.notify_all();
-  
+  // Run the Qt event loop
   qapp.exec();
   
-  unique_lock<mutex> quit_lock(quit_mutex_);
-  quit_done_ = true;
-  quit_lock.unlock();
-  quit_condition_.notify_all();
-}
-
-void QtThread::WaitForFunctionQueue() {
-  unique_lock<mutex> lock(function_queue_runner_->function_queue_mutex_);
-  while (!function_queue_runner_->function_queue_.empty()) {
-    function_queue_runner_->function_queue_empty_condition_.wait(lock);
-  }
-  lock.unlock();
-}
-
-QtThread* QtThread::Instance() {
-  static QtThread instance;
-  return &instance;
+  app_thread.join();
+  return return_value;
 }
 
 }
-
-#include "qt_thread.moc"

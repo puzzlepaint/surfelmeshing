@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -34,17 +34,20 @@
 #include <QPainter>
 #include <QPaintEvent>
 
+#include "libvis/image_display_qt_window.h"
+
 namespace vis {
 
-ImageDisplayQtWidget::ImageDisplayQtWidget(QWidget* parent)
+ImageDisplayQtWidget::ImageDisplayQtWidget(ImageDisplayQtWindow* window, QWidget* parent)
     : QWidget(parent),
-      callbacks_(nullptr) {
+      callbacks_(nullptr),
+      window_(window) {
   dragging_ = false;
   
   view_scale_ = 1.0;
   view_offset_x_ = 0.0;
   view_offset_y_ = 0.0;
-  image_ = QImage();
+  qimage_ = QImage();
   UpdateViewTransforms();
   
   setAttribute(Qt::WA_OpaquePaintEvent);
@@ -56,18 +59,13 @@ ImageDisplayQtWidget::ImageDisplayQtWidget(QWidget* parent)
 
 ImageDisplayQtWidget::~ImageDisplayQtWidget() {}
 
-void ImageDisplayQtWidget::SetImage(const QImage& image) {
-  image_ = image;
-  UpdateViewTransforms();
-  update(rect());
-}
-
 void ImageDisplayQtWidget::SetCallbacks(const shared_ptr<ImageWindowCallbacks>& callbacks) {
   callbacks_ = callbacks;
   update(rect());
 }
 
 void ImageDisplayQtWidget::SetViewOffset(double x, double y) {
+  window_->FitContent(false);
   view_offset_x_ = x;
   view_offset_y_ = y;
   UpdateViewTransforms();
@@ -75,10 +73,39 @@ void ImageDisplayQtWidget::SetViewOffset(double x, double y) {
 }
 
 void ImageDisplayQtWidget::SetZoomFactor(double zoom_factor) {
+  window_->FitContent(false);
   view_scale_ = zoom_factor;
-  ZoomChanged(view_scale_);
+  emit ZoomChanged(view_scale_);
   UpdateViewTransforms();
   update(rect());
+}
+
+void ImageDisplayQtWidget::ZoomAt(int x, int y, double target_zoom) {
+  // viewport_to_image_.m11() * pos.x() + viewport_to_image_.m13() == (pos.x() - (new_view_offset_x_ + (0.5 * width()) - (0.5 * image_.width()) * new_view_scale_)) / new_view_scale_;
+  QPointF center_on_image = ViewportToImage(QPoint(x, y));
+  view_offset_x_ = x - (0.5 * width() - (0.5 * qimage_.width()) * target_zoom) - target_zoom * center_on_image.x();
+  view_offset_y_ = y - (0.5 * height() - (0.5 * qimage_.height()) * target_zoom) - target_zoom * center_on_image.y();
+  SetZoomFactor(target_zoom);
+}
+
+void ImageDisplayQtWidget::FitContent(bool update_display) {
+  if (qimage_.isNull()) {
+    return;
+  }
+  
+  // Center image
+  view_offset_x_ = 0.0;
+  view_offset_y_ = 0.0;
+  
+  // Scale image such that it exactly fills the widget
+  view_scale_ = std::min(width() / (1. * qimage_.width()),
+                         height() / (1. * qimage_.height()));
+  emit ZoomChanged(view_scale_);
+  
+  if (update_display) {
+    UpdateViewTransforms();
+    update(rect());
+  }
 }
 
 void ImageDisplayQtWidget::AddSubpixelDotPixelCornerConv(float x, float y, u8 r, u8 g, u8 b) {
@@ -96,20 +123,32 @@ void ImageDisplayQtWidget::AddSubpixelLinePixelCornerConv(float x0, float y0, fl
   new_line->rgb = qRgb(r, g, b);
 }
 
+void ImageDisplayQtWidget::AddSubpixelTextPixelCornerConv(float x, float y, u8 r, u8 g, u8 b, const string& text) {
+  texts_.emplace_back();
+  SubpixelText* new_text = &texts_.back();
+  new_text->xy = QPointF(x, y);
+  new_text->rgb = qRgb(r, g, b);
+  new_text->text = QString::fromStdString(text);
+}
+
 void ImageDisplayQtWidget::Clear() {
   dots_.clear();
   lines_.clear();
+  texts_.clear();
 }
 
 QSize ImageDisplayQtWidget::sizeHint() const {
-  if (image_.isNull()) {
+  if (qimage_.isNull()) {
     return QSize(150, 150);
   } else {
-    return image_.size();
+    return qimage_.size();
   }
 }
 
 void ImageDisplayQtWidget::resizeEvent(QResizeEvent* event) {
+  if (window_->fit_contents_active()) {
+    FitContent(false);
+  }
   UpdateViewTransforms();
   QWidget::resizeEvent(event);
   if (callbacks_) {
@@ -125,7 +164,7 @@ void ImageDisplayQtWidget::paintEvent(QPaintEvent* event) {
   
   painter.fillRect(event_rect, QColor(Qt::gray));
   
-  if (image_.isNull()) {
+  if (qimage_.isNull()) {
     return;
   }
   
@@ -135,7 +174,7 @@ void ImageDisplayQtWidget::paintEvent(QPaintEvent* event) {
   painter.setTransform(image_to_viewport_T);
   
   painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
-  painter.drawImage(QPointF(0, 0), image_);
+  painter.drawImage(QPointF(0, 0), qimage_);
   
   painter.resetTransform();
   
@@ -159,6 +198,17 @@ void ImageDisplayQtWidget::paintEvent(QPaintEvent* event) {
       
       painter.setPen(line.rgb);
       painter.drawLine(viewport_position_0, viewport_position_1);
+    }
+  }
+  
+  if (!texts_.empty()) {
+    painter.setBrush(Qt::NoBrush);
+    
+    for (const SubpixelText& text : texts_) {
+      QPointF viewport_position = image_to_viewport_T.map(text.xy);
+      
+      painter.setPen(text.rgb);
+      painter.drawText(viewport_position, text.text);
     }
   }
   
@@ -196,18 +246,51 @@ void ImageDisplayQtWidget::mousePressEvent(QMouseEvent* event) {
   }
 }
 
+template <typename T>
+void DisplayValue(T value, std::ostringstream* o) {
+  *o << value;
+}
+
+void DisplayValue(char value, std::ostringstream* o) {
+  *o << static_cast<int>(value);
+}
+
+void DisplayValue(unsigned char value, std::ostringstream* o) {
+  *o << static_cast<int>(value);
+}
+
+template <typename Derived>
+void DisplayValue(const Eigen::MatrixBase<Derived>& value, std::ostringstream* o) {
+  *o << value.transpose();
+}
+
+void DisplayValue(const Vec3u8& value, std::ostringstream* o) {
+  *o << value.transpose().cast<int>();
+}
+
+void DisplayValue(const Vec4u8& value, std::ostringstream* o) {
+  *o << value.transpose().cast<int>();
+}
+
 void ImageDisplayQtWidget::mouseMoveEvent(QMouseEvent* event) {
   QPointF image_pos = ViewportToImage(event->localPos());
-  QRgb pixel_value = 0;
+  string pixel_value;
+  QRgb pixel_displayed_value = qRgb(0, 0, 0);
   bool pixel_value_valid =
-      !image_.isNull() && image_pos.x() >= 0 && image_pos.y() >= 0 &&
-      image_pos.x() < image_.width() && image_pos.y() < image_.height();
+      !qimage_.isNull() && image_pos.x() >= 0 && image_pos.y() >= 0 &&
+      image_pos.x() < qimage_.width() && image_pos.y() < qimage_.height();
   if (pixel_value_valid) {
     int x = image_pos.x();
     int y = image_pos.y();
-    pixel_value = image_.pixel(x, y);
+    
+    std::ostringstream o;
+    // NOTE: Special cases of DisplayValue() for char types are needed
+    //       since the values are printed as letters otherwise.
+    IDENTIFY_IMAGE(image_, DisplayValue(_image_->at(x, y), &o));
+    pixel_value = o.str();
+    pixel_displayed_value = qimage_.pixel(x, y);
   }
-  emit CursorPositionChanged(image_pos, pixel_value_valid, pixel_value);
+  emit CursorPositionChanged(image_pos, pixel_value_valid, pixel_value, pixel_displayed_value);
   
   if (dragging_) {
     updateDragging(event->pos());
@@ -249,21 +332,13 @@ void ImageDisplayQtWidget::wheelEvent(QWheelEvent* event) {
     double num_steps = degrees / 15.0;
     
     double scale_factor = pow(sqrt(2.0), num_steps);
+    double target_scale = view_scale_ * scale_factor;
     
-    // viewport_to_image_.m11() * pos.x() + viewport_to_image_.m13() == (pos.x() - (new_view_offset_x_ + (0.5 * width()) - (0.5 * image_.width()) * new_view_scale_)) / new_view_scale_;
-    QPointF center_on_image = ViewportToImage(event->pos());
-    view_offset_x_ = event->pos().x() - (0.5 * width() - (0.5 * image_.width()) * (view_scale_ * scale_factor)) - (view_scale_ * scale_factor) * center_on_image.x();
-    view_offset_y_ = event->pos().y() - (0.5 * height() - (0.5 * image_.height()) * (view_scale_ * scale_factor)) - (view_scale_ * scale_factor) * center_on_image.y();
-    view_scale_ = view_scale_ * scale_factor;
-    emit ZoomChanged(view_scale_);
-    
-    UpdateViewTransforms();
+    ZoomAt(event->pos().x(), event->pos().y(), target_scale);
     
     if (callbacks_ && event->orientation() == Qt::Vertical) {
       callbacks_->WheelRotated(event->delta() / 8.0f, ImageWindowCallbacks::ConvertQtModifiers(event));
     }
-    
-    update(rect());
   } else {
     event->ignore();
   }
@@ -281,10 +356,170 @@ void ImageDisplayQtWidget::keyReleaseEvent(QKeyEvent* event) {
   }
 }
 
+// TODO: Is this useful anywhere? If not, remove.
+// template <typename DestT, typename SrcT>
+// DestT ScalarOrMatrixCast(const SrcT& value) {
+//   return static_cast<DestT>(value);
+// }
+// 
+// template <typename DestT, typename _Scalar, int _Rows, int _Cols, int _Options, int _MaxRows, int _MaxCols>
+// Eigen::Matrix<DestT, _Rows, _Cols, _Options, _MaxRows, _MaxCols>
+//     ScalarOrMatrixCast(const Eigen::Matrix<_Scalar, _Rows, _Cols, _Options, _MaxRows, _MaxCols>& value) {
+//   return value.template cast<DestT>();
+// }
+
+// TODO: Could it be that it would be much better readable to simply split
+//       the input into scalar and matrix types in AdjustBrightnessContrastHelper()
+//       to avoid the need for get_display_type and AdjustBrightnessContrast()?
+//       It would duplicate the logic in AdjustBrightnessContrastHelper() though.
+template<typename T>
+struct get_display_type {
+  typedef Vec3u8 Type;
+};
+
+template<typename _Scalar, int _Rows, int _Cols, int _Options, int _MaxRows, int _MaxCols>
+struct get_display_type<Matrix<_Scalar, _Rows, _Cols, _Options, _MaxRows, _MaxCols>> {
+  typedef Matrix<u8, _Rows, _Cols, _Options, _MaxRows, _MaxCols> Type;
+};
+
+// HACK: We identify scalar vs. matrix input by defining a type as bool in the
+//       scalar case, and as int in the matrix case (types chosen arbitrarily).
+template<typename T>
+struct get_matrix_identifier_type {
+  typedef bool Type;
+};
+
+template<typename _Scalar, int _Rows, int _Cols, int _Options, int _MaxRows, int _MaxCols>
+struct get_matrix_identifier_type<Matrix<_Scalar, _Rows, _Cols, _Options, _MaxRows, _MaxCols>> {
+  typedef int Type;
+};
+
+template <typename Identifier, typename SrcT>
+void AdjustBrightnessContrast(
+    Vec3u8* /*dest*/,
+    const SrcT* /*src*/,
+    double /*scale*/,
+    double /*bias*/,
+    Identifier /*dummy*/) {
+  LOG(FATAL) << "This should never be called. One of the other overloads should be used instead.";
+}
+
+template <typename SrcT>
+void AdjustBrightnessContrast(
+    Vec3u8* dest,
+    const SrcT* src,
+    double scale,
+    double bias,
+    bool /*dummy*/) {
+  *dest = Vec3u8::Constant(std::max<double>(0, std::min<double>(255, scale * (*src) + bias)));
+}
+
+template <>
+void AdjustBrightnessContrast(
+    Vec3u8* dest,
+    const float* src,
+    double scale,
+    double bias,
+    bool /*dummy*/) {
+  if (std::isnan(*src)) {
+    *dest = Vec3u8(255, 0, 0);
+  } else {
+    *dest = Vec3u8::Constant(std::max<double>(0, std::min<double>(255, scale * (*src) + bias)));
+  }
+}
+
+template <>
+void AdjustBrightnessContrast(
+    Vec3u8* dest,
+    const double* src,
+    double scale,
+    double bias,
+    bool /*dummy*/) {
+  if (std::isnan(*src)) {
+    *dest = Vec3u8(255, 0, 0);
+  } else {
+    *dest = Vec3u8::Constant(std::max<double>(0, std::min<double>(255, scale * (*src) + bias)));
+  }
+}
+
+template <typename _SrcScalar, int _Rows, int _Cols, int _Options, int _MaxRows, int _MaxCols>
+void AdjustBrightnessContrast(
+  Vec3u8* dest,
+  const Eigen::Matrix<_SrcScalar, _Rows, _Cols, _Options, _MaxRows, _MaxCols>* src,
+  double scale,
+  double bias,
+  int /*dummy*/) {
+  typedef Eigen::Matrix<double, _Rows, _Cols, _Options, _MaxRows, _MaxCols> DoubleMatrixType;
+  *dest = DoubleMatrixType::Zero().cwiseMax(
+              DoubleMatrixType::Constant(255).cwiseMin(
+                  scale * src->template cast<double>() + DoubleMatrixType::Constant(bias))).template cast</*_DestScalar*/ u8>();
+}
+
+// TODO: Rename function
+template <typename T>
+void AdjustBrightnessContrastHelper(Image<T>* image, double white_value, double black_value, QImage* qimage) {
+  typedef typename get_display_type<T>::Type DisplayType;  // Will be Vec3u8 for scalar values, or an u8 vector for vectors.
+  typedef typename get_matrix_identifier_type<T>::Type IdentifierType;
+  Image<DisplayType> display_image(image->width(), image->height());
+  double scale = 255.999 / (white_value - black_value);
+  double bias = (-255.999 * black_value) / (white_value - black_value);
+  for (u32 y = 0; y < image->height(); ++ y) {
+    const T* read_ptr = image->row(y);
+    DisplayType* write_ptr = display_image.row(y);
+    DisplayType* write_end = write_ptr + image->width();
+    while (write_ptr < write_end) {
+      AdjustBrightnessContrast(write_ptr, read_ptr, scale, bias, IdentifierType());
+      ++ write_ptr;
+      ++ read_ptr;
+    }
+  }
+  *qimage = display_image.WrapInQImage().copy();
+}
+
+template <>
+void AdjustBrightnessContrastHelper(Image<Vec2u8>* /*image*/, double /*white_value*/, double /*black_value*/, QImage* /*qimage*/) {
+  // Cannot display Vec2u8 images.
+  // NOTE: It would be an option to pad them with the 3rd vector component being zero.
+  LOG(FATAL) << "Displaying Vec2u8 images is not supported.";
+}
+
+template <>
+void AdjustBrightnessContrastHelper(Image<Vec4u8>* /*image*/, double /*white_value*/, double /*black_value*/, QImage* /*qimage*/) {
+  // Cannot display Vec4u8 images.
+  LOG(FATAL) << "Displaying Vec4u8 images is not supported.";
+}
+
+void ImageDisplayQtWidget::UpdateQImage() {
+  double black_value = window_->black_value_;
+  double white_value = window_->white_value_;
+  
+  // Direct wrapping is only possible if no transformations are applied.
+  if (black_value == 0 && white_value == 255) {
+    // No brightness / contrast adjustment required.
+    if (image_.type() == ImageType::U8) {
+      qimage_ = image_.get<u8>()->WrapInQImage();
+    } else if (image_.type() == ImageType::Vec3u8) {
+      qimage_ = image_.get<Vec3u8>()->WrapInQImage();
+    } else if (image_.type() == ImageType::Vec4u8) {
+      qimage_ = image_.get<Vec4u8>()->WrapInQImage();
+    } else {
+      // Try to convert the image to a displayable type using AdjustBrightnessContrastHelper().
+      IDENTIFY_IMAGE(image_, AdjustBrightnessContrastHelper(_image_, white_value, black_value, &qimage_));
+    }
+  } else {
+    // Perform brightness / contrast adjustment.
+    IDENTIFY_IMAGE(image_, AdjustBrightnessContrastHelper(_image_, white_value, black_value, &qimage_));
+  }
+  
+  if (window_->fit_contents_active()) {
+    FitContent(false);
+  }
+}
+
 void ImageDisplayQtWidget::UpdateViewTransforms() {
   image_to_viewport_.setMatrix(
-      view_scale_,           0,   view_offset_x_ + (0.5 * width()) - (0.5 * image_.width()) * view_scale_,
-                0, view_scale_, view_offset_y_ + (0.5 * height()) - (0.5 * image_.height()) * view_scale_,
+      view_scale_,           0,   view_offset_x_ + (0.5 * width()) - (0.5 * qimage_.width()) * view_scale_,
+                0, view_scale_, view_offset_y_ + (0.5 * height()) - (0.5 * qimage_.height()) * view_scale_,
                 0,           0,                                                                         1);
   viewport_to_image_ = image_to_viewport_.inverted();
 }
@@ -309,20 +544,16 @@ void ImageDisplayQtWidget::startDragging(QPoint pos) {
 
 void ImageDisplayQtWidget::updateDragging(QPoint pos) {
 //   Q_ASSERT(dragging);
-  view_offset_x_ += (pos - drag_start_pos_).x();
-  view_offset_y_ += (pos - drag_start_pos_).y();
+  
+  QPoint offset = pos - drag_start_pos_;
+  SetViewOffset(view_offset_x_ + offset.x(),
+                view_offset_y_ + offset.y());
+  
   drag_start_pos_ = pos;
-  UpdateViewTransforms();
-  update(rect());
 }
 
 void ImageDisplayQtWidget::finishDragging(QPoint pos) {
-//   Q_ASSERT(dragging);
-  view_offset_x_ += (pos - drag_start_pos_).x();
-  view_offset_y_ += (pos - drag_start_pos_).y();
-  drag_start_pos_ = pos;
-  UpdateViewTransforms();
-  update(rect());
+  updateDragging(pos);
   
   dragging_ = false;
   setCursor(normal_cursor_);

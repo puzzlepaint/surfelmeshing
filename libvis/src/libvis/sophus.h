@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -29,6 +29,11 @@
 
 #pragma once
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+#include <Eigen/StdVector>
 #include <sophus/rxso3.hpp>
 #include <sophus/se2.hpp>
 #include <sophus/se3.hpp>
@@ -36,7 +41,12 @@
 #include <sophus/so2.hpp>
 #include <sophus/so3.hpp>
 
+
 #include "libvis/libvis.h"
+
+#ifdef __CUDA_ARCH__
+#error "Compiling Eigen code with nvcc is not supported properly, therefore Eigen headers should not be included from .cu / .cuh files."
+#endif
 
 namespace vis {
 
@@ -59,6 +69,26 @@ using Sophus::SO2d;
 
 using Sophus::SO3f;
 using Sophus::SO3d;
+
+/// Averages the given Sophus::SE3 transformations.
+template <typename Scalar>
+Sophus::SE3<Scalar> AverageSE3(int count, Sophus::SE3<Scalar>* transformations) {
+  Eigen::Matrix<Scalar, 3, 3> accumulated_rotations;
+  accumulated_rotations.setZero();
+  Eigen::Matrix<Scalar, 3, 1> accumulated_translations;
+  accumulated_translations.setZero();
+  
+  for (int i = 0; i < count; ++ i) {
+    accumulated_rotations += transformations[i].so3().matrix();
+    accumulated_translations += transformations[i].translation();
+  }
+  
+  Sophus::SE3<Scalar> result;
+  Eigen::JacobiSVD<Eigen::Matrix<Scalar, 3, 3>> svd(accumulated_rotations, Eigen::ComputeFullU | Eigen::ComputeFullV);
+  result.setRotationMatrix((svd.matrixU() * svd.matrixV().transpose()));
+  result.translation() = (accumulated_translations / (static_cast<Scalar>(1) * count));
+  return result;
+}
 
 }
 

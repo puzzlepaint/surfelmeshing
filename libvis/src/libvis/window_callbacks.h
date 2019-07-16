@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -59,6 +59,8 @@ class WindowCallbacks {
     kAlt   = 1 << 2
   };
   
+  virtual ~WindowCallbacks() = default;
+  
   // Called as the first callback to notify this class about the RenderWindow it
   // is associated with.
   void SetRenderWindow(RenderWindowT* window) {
@@ -66,8 +68,12 @@ class WindowCallbacks {
   }
   
   // Called when the render window is initialized. Can be used to allocate
-  // rendering API resources.
+  // rendering API resources that require a rendering API context.
   virtual void Initialize() {}
+  
+  // Called when the render window is destroyed. Can be used to deallocate
+  // rendering API resources that require a rendering API context.
+  virtual void Deinitialize() {}
   
   // Called after the window is resized. Can be used to re-allocate rendering
   // API resources in the right size.

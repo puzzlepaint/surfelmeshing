@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -35,8 +35,8 @@
 
 namespace vis {
 
-RenderWidgetOpenGL::RenderWidgetOpenGL(const QGLFormat& format, const shared_ptr<RenderWindowCallbacks>& callbacks)
-    : QGLWidget(format), callbacks_(callbacks) {
+RenderWidgetOpenGL::RenderWidgetOpenGL(const shared_ptr<RenderWindowCallbacks>& callbacks)
+    : QOpenGLWidget(), callbacks_(callbacks) {
   setAttribute(Qt::WA_OpaquePaintEvent);
   setAutoFillBackground(false);
   setMinimumSize(200, 200);
@@ -45,33 +45,24 @@ RenderWidgetOpenGL::RenderWidgetOpenGL(const QGLFormat& format, const shared_ptr
   setSizePolicy(QSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding));
 }
 
-RenderWidgetOpenGL::~RenderWidgetOpenGL() {}
+RenderWidgetOpenGL::~RenderWidgetOpenGL() {
+  makeCurrent();
+  callbacks_->Deinitialize();
+  doneCurrent();
+}
 
 void RenderWidgetOpenGL::initializeGL() {
   callbacks_->Initialize();
+  initialized_ = true;
 }
 
-void RenderWidgetOpenGL::paintEvent(QPaintEvent* event) {
+void RenderWidgetOpenGL::paintGL() {
+  if (!initialized_) {
+    return;
+  }
   CHECK_OPENGL_NO_ERROR();
-  (void) event;
   
-//   // Save states for QPainter.
-//   glMatrixMode(GL_MODELVIEW);
-//   glPushMatrix();
-  // Render.
   callbacks_->Render();
-  
-//   // Reset state for QPainter.
-//   glMatrixMode(GL_MODELVIEW);
-//   glPopMatrix();
-  
-  // Paint 2D elements with QPainter.
-  QPainter painter(this);
-  painter.setRenderHint(QPainter::Antialiasing);
-  
-  // NOTE: Could draw with QPainter here.
-  
-  painter.end();
 }
 
 void RenderWidgetOpenGL::resizeGL(int width, int height) {
@@ -90,12 +81,12 @@ void RenderWidgetOpenGL::mousePressEvent(QMouseEvent* event) {
     return;
   }
   
-  callbacks_->MouseDown(button, event->pos().x(), event->pos().y());
+  callbacks_->MouseDown(button, event->x(), event->y());
   event->accept();
 }
 
 void RenderWidgetOpenGL::mouseMoveEvent(QMouseEvent* event) {
-  callbacks_->MouseMove(event->pos().x(), event->pos().y());
+  callbacks_->MouseMove(event->x(), event->y());
   event->accept();
 }
 
@@ -111,7 +102,7 @@ void RenderWidgetOpenGL::mouseReleaseEvent(QMouseEvent* event) {
     return;
   }
   
-  callbacks_->MouseUp(button, event->pos().x(), event->pos().y());
+  callbacks_->MouseUp(button, event->x(), event->y());
   event->accept();
 }
 
@@ -134,27 +125,37 @@ void RenderWidgetOpenGL::keyReleaseEvent(QKeyEvent* event) {
 }
 
 
-RenderWindowQtOpenGL::RenderWindowQtOpenGL(const string& title, int width, int height, const shared_ptr<RenderWindowCallbacks>& callbacks)
-    : RenderWindowQt(title, width, height, callbacks) {
-  QtThread::Instance()->RunInQtThreadBlocking([&](){
-    QGLFormat format;
-    format.setVersion(3, 3);
-    format.setProfile(QGLFormat::CompatibilityProfile);  // TODO: Does not seem to work on my laptop.
-    
-    // Get multisample buffer support
-    format.setSampleBuffers(true);
-    format.setSamples(4);
-    
+RenderWindowQtOpenGL::RenderWindowQtOpenGL(
+    const string& title,
+    int width,
+    int height,
+    const shared_ptr<RenderWindowCallbacks>& callbacks,
+    bool use_qt_thread,
+    bool show)
+    : RenderWindowQt(title, width, height, callbacks, use_qt_thread, show) {
+  auto init_function = [&](){
     // Add the OpenGL render widget to the window created by the parent class.
-    render_widget_ = new RenderWidgetOpenGL(format, callbacks);
+    render_widget_ = new RenderWidgetOpenGL(callbacks);
     window_->setCentralWidget(render_widget_);
-  });
+  };
+  
+  if (use_qt_thread) {
+    RunInQtThreadBlocking(init_function);
+  } else {
+    init_function();
+  }
 }
 
 void RenderWindowQtOpenGL::RenderFrame() {
-  QtThread::Instance()->RunInQtThread([&](){
+  auto render_function = [&](){
     render_widget_->update(render_widget_->rect());
-  });
+  };
+  
+  if (use_qt_thread_) {
+    RunInQtThread(render_function);
+  } else {
+    render_function();
+  }
 }
 
 void RenderWindowQtOpenGL::MakeContextCurrent() {

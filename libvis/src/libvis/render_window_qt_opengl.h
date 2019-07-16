@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -31,7 +31,7 @@
 
 #include "libvis/opengl.h"
 
-#include <QGLWidget>
+#include <QOpenGLWidget>
 #include <QInputEvent>
 
 #include "libvis/libvis.h"
@@ -39,15 +39,15 @@
 
 namespace vis {
 
-class RenderWidgetOpenGL : public QGLWidget {
+class RenderWidgetOpenGL : public QOpenGLWidget {
  Q_OBJECT
  public:
-  RenderWidgetOpenGL(const QGLFormat& format, const shared_ptr<RenderWindowCallbacks>& callbacks);
+  RenderWidgetOpenGL(const shared_ptr<RenderWindowCallbacks>& callbacks);
   ~RenderWidgetOpenGL();
    
  protected:
   virtual void initializeGL() override;
-  virtual void paintEvent(QPaintEvent *event) override;
+  virtual void paintGL() override;
   virtual void resizeGL(int width, int height) override;
   virtual void mousePressEvent(QMouseEvent* event) override;
   virtual void mouseMoveEvent(QMouseEvent* event) override;
@@ -56,19 +56,29 @@ class RenderWidgetOpenGL : public QGLWidget {
   virtual void keyPressEvent(QKeyEvent* event) override;
   virtual void keyReleaseEvent(QKeyEvent* event) override;
   
+  bool initialized_ = false;
   shared_ptr<RenderWindowCallbacks> callbacks_;
 };
 
 // A Qt and OpenGL based render window implementation.
 class RenderWindowQtOpenGL : public RenderWindowQt {
  public:
-  RenderWindowQtOpenGL(const std::string& title, int width, int height, const shared_ptr<RenderWindowCallbacks>& callbacks);
+  RenderWindowQtOpenGL(
+      const std::string& title,
+      int width,
+      int height,
+      const shared_ptr<RenderWindowCallbacks>& callbacks,
+      bool use_qt_thread = true,
+      bool show = true);
   
   virtual void RenderFrame() override;
   
   virtual void MakeContextCurrent() override;
   
   virtual void ReleaseCurrentContext() override;
+  
+  inline RenderWidgetOpenGL* widget() { return render_widget_; }
+  inline const RenderWidgetOpenGL* widget() const { return render_widget_; }
 
  private:
   // Pointer is managed by Qt.

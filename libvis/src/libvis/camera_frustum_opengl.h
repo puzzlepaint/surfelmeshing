@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -61,7 +61,7 @@ class CameraFrustumOpenGL {
   
   // Creates a frustum for the given camera. Requires a current OpenGL context for this thread.
   inline void Create(const Camera& camera) {
-    CHOOSE_CAMERA_TEMPLATE(camera, _Create(_camera));
+    IDENTIFY_CAMERA(camera, _Create(_camera));
   }
   
   // Renders the point cloud. Requires a current OpenGL context for this thread.

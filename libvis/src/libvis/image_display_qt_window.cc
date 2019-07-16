@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -37,11 +37,14 @@
 #include <QCloseEvent>
 #include <QDesktopWidget>
 #include <QFileDialog>
+#include <QLabel>
+#include <QLineEdit>
 #include <QMessageBox>
 #include <QStatusBar>
-#include <QTimer>
 #include <QToolBar>
+#include <QToolButton>
 #include <QVBoxLayout>
+#include <QWidgetAction>
 
 #include "libvis/image_display.h"
 
@@ -49,7 +52,7 @@
 
 // This must be done outside of any namespace according to the Qt documentation.
 void InitQtResources() {
-  std::mutex init_mutex;
+  static std::mutex init_mutex;
   std::unique_lock<std::mutex> lock(init_mutex);
   static bool resources_initialized = false;
   if (!resources_initialized) {
@@ -66,22 +69,83 @@ void InitQtResources() {
 
 namespace vis {
 
+class DisplaySettingsAction: public QWidgetAction {
+ Q_OBJECT
+ public:
+  explicit DisplaySettingsAction(ImageDisplayQtWindow* window, QWidget* parent)
+      : QWidgetAction(parent), window_(window) {}
+
+ public slots:
+  void SetBlackValue() {
+    bool ok = false;
+    double value = black_value_edit_->text().toDouble(&ok);
+    if (ok) {
+      window_->black_value_ = value;
+      window_->widget().UpdateQImage();
+      window_->widget().update(window_->widget().rect());
+    }
+  }
+  
+  void SetWhiteValue() {
+    bool ok = false;
+    double value = white_value_edit_->text().toDouble(&ok);
+    if (ok) {
+      window_->white_value_ = value;
+      window_->widget().UpdateQImage();
+      window_->widget().update(window_->widget().rect());
+    }
+  }
+  
+ protected:
+  QWidget* createWidget(QWidget* parent) {
+    QGridLayout* layout = new QGridLayout();
+    
+    layout->addWidget(new QLabel("Intensity display range min:"), 0, 0);
+    
+    black_value_edit_ = new QLineEdit(QString::number(window_->black_value_));
+    connect(black_value_edit_, SIGNAL(editingFinished()), this, SLOT(SetBlackValue()));
+    connect(black_value_edit_, SIGNAL(returnPressed()), this, SLOT(SetBlackValue()));
+    layout->addWidget(black_value_edit_, 0, 1);
+    
+    layout->addWidget(new QLabel("Intensity display range max:"), 1, 0);
+    
+    white_value_edit_ = new QLineEdit(QString::number(window_->white_value_));
+    connect(white_value_edit_, SIGNAL(editingFinished()), this, SLOT(SetWhiteValue()));
+    connect(white_value_edit_, SIGNAL(returnPressed()), this, SLOT(SetWhiteValue()));
+    layout->addWidget(white_value_edit_, 1, 1);
+    
+    QWidget* container = new QWidget(parent);
+    container->setLayout(layout);
+    return container;
+  }
+  
+  QLineEdit* black_value_edit_;
+  QLineEdit* white_value_edit_;
+  
+  ImageDisplayQtWindow* window_;
+};
+
+
+
 ImageDisplayQtWindow::ImageDisplayQtWindow(
     ImageDisplay* display,
     QWidget* parent,
     Qt::WindowFlags flags)
     : QMainWindow(parent, flags),
+      last_zoom_factor_(1),
       have_last_cursor_pos_(false),
       last_pixel_value_valid_(false),
+      black_value_(0),
+      white_value_(255),
       display_(display) {
   InitQtResources();
   
   // Create main layout with image widget.
   QVBoxLayout* layout = new QVBoxLayout();
   layout->setContentsMargins(0, 0, 0, 0);
-  image_widget_ = new ImageDisplayQtWidget();
-  connect(image_widget_, SIGNAL(CursorPositionChanged(QPointF, bool, QRgb)), this, SLOT(CursorPositionChanged(QPointF, bool, QRgb)));
-  connect(image_widget_, SIGNAL(ZoomChanged(double)), this, SLOT(ZoomChanged(double)));
+  image_widget_ = new ImageDisplayQtWidget(this);
+  connect(image_widget_, &ImageDisplayQtWidget::CursorPositionChanged, this, &ImageDisplayQtWindow::CursorPositionChanged);
+  connect(image_widget_, &ImageDisplayQtWidget::ZoomChanged, this, &ImageDisplayQtWindow::ZoomChanged);
   layout->addWidget(image_widget_, 1);
   
   // Embed the layout in a widget used as central widget.
@@ -92,10 +156,20 @@ ImageDisplayQtWindow::ImageDisplayQtWindow(
   
   // Create the toolbar.
   tool_bar_ = new QToolBar("Main toolbar", this);
-  tool_bar_->addAction(QIcon(":/save.png"), "&Save", this, SLOT(SaveImage()));
-  tool_bar_->addAction(QIcon(":/copy.png"), "&Copy", this, SLOT(CopyImage()));
-  tool_bar_->addAction(QIcon(":/zoom_and_resize_to_contents.png"), "&Zoom and resize to contents", this, SLOT(ZoomAndResizeToContent()));
-  tool_bar_->addAction(QIcon(":/resize_to_contents.png"), "&Resize to contents", this, SLOT(ResizeToContentWithoutZoom()));
+  tool_bar_->addAction(QIcon(":/save.png"), "&Save image", this, SLOT(SaveImage()));
+  tool_bar_->addAction(QIcon(":/copy.png"), "&Copy image to clipboard", this, SLOT(CopyImage()));
+  tool_bar_->addAction(QIcon(":/scale_1x.png"), "Set the scaling to one", this, SLOT(SetScaleToOne()));
+  fit_contents_act_ = tool_bar_->addAction(QIcon(":/fit_contents.png"), "&Fit image to window size", this, SLOT(FitContentToggled()));
+  fit_contents_act_->setCheckable(true);
+  zoom_and_resize_act = tool_bar_->addAction(QIcon(":/zoom_and_resize_to_contents.png"), "&Zoom and resize window to image", this, SLOT(ZoomAndResizeToContent()));
+  resize_act = tool_bar_->addAction(QIcon(":/resize_to_contents.png"), "&Resize window to image", this, SLOT(ResizeToContentWithoutZoom()));
+  
+  QToolButton* settings_toolbutton = new QToolButton();
+  settings_toolbutton->setIcon(QIcon(":/settings_sliders.png"));
+  settings_toolbutton->setPopupMode(QToolButton::InstantPopup);
+  settings_toolbutton->addAction(new DisplaySettingsAction(this, this));
+  tool_bar_->addWidget(settings_toolbutton);
+  
   addToolBar(Qt::TopToolBarArea, tool_bar_);
   
   // Enable the status bar.
@@ -106,8 +180,9 @@ ImageDisplayQtWindow::ImageDisplayQtWindow(
   resize(0, 0);
 }
 
-void ImageDisplayQtWindow::SetImage(const QImage& image) {
-  image_widget_->SetImage(image);
+void ImageDisplayQtWindow::SetBlackWhiteValues(double black, double white) {
+  black_value_ = black;
+  white_value_ = white;
 }
 
 void ImageDisplayQtWindow::SetCallbacks(const shared_ptr<ImageWindowCallbacks>& callbacks) {
@@ -130,14 +205,25 @@ void ImageDisplayQtWindow::AddSubpixelLinePixelCornerConv(float x0, float y0, fl
   image_widget_->AddSubpixelLinePixelCornerConv(x0, y0, x1, y1, r, g, b);
 }
 
+void ImageDisplayQtWindow::AddSubpixelTextPixelCornerConv(float x, float y, u8 r, u8 g, u8 b, const string& text) {
+  image_widget_->AddSubpixelTextPixelCornerConv(x, y, r, g, b, text);
+}
+
 void ImageDisplayQtWindow::Clear() {
   image_widget_->Clear();
 }
 
-void ImageDisplayQtWindow::CursorPositionChanged(const QPointF& pixel_pos, bool pixel_value_valid, QRgb pixel_value) {
+void ImageDisplayQtWindow::SetDisplayAsWidget() {
+  setWindowFlags(Qt::Widget);
+  zoom_and_resize_act->setVisible(false);
+  resize_act->setVisible(false);
+}
+
+void ImageDisplayQtWindow::CursorPositionChanged(const QPointF& pixel_pos, bool pixel_value_valid, const std::string& pixel_value, QRgb pixel_displayed_value) {
   last_cursor_pos_ = pixel_pos;
   last_pixel_value_valid_ = pixel_value_valid;
   last_pixel_value_ = pixel_value;
+  last_pixel_displayed_value_ = pixel_displayed_value;
   have_last_cursor_pos_ = true;
   UpdateStatusBar();
 }
@@ -205,7 +291,7 @@ void ImageDisplayQtWindow::ResizeToContent(bool adjust_zoom) {
     // If the size is larger than the screen size in any of the two dimensions,
     // zoom out until it fits.
     while (size.width() > screen_size.width() ||
-          size.height() > screen_size.height()) {
+           size.height() > screen_size.height()) {
       initial_zoom_factor *= 0.5;
       size = QSize(
         initial_zoom_factor * image_widget_->sizeHint().width(),
@@ -237,6 +323,23 @@ void ImageDisplayQtWindow::ResizeToContent(bool adjust_zoom) {
   }
 }
 
+void ImageDisplayQtWindow::SetScaleToOne() {
+  image_widget_->ZoomAt(image_widget_->width() / 2, image_widget_->height() / 2, 1);
+}
+
+void ImageDisplayQtWindow::FitContent(bool enable) {
+  fit_contents_act_->setChecked(enable);
+  if (enable) {
+    image_widget_->FitContent();
+  }
+}
+
+void ImageDisplayQtWindow::FitContentToggled() {
+  if (fit_contents_act_->isChecked()) {
+    FitContent();
+  }
+}
+
 void ImageDisplayQtWindow::closeEvent(QCloseEvent* event) {
   if (display_) {
     display_->SetWindow(nullptr);
@@ -249,9 +352,10 @@ void ImageDisplayQtWindow::UpdateStatusBar() {
   QString pixel_value_string;
   if (last_pixel_value_valid_) {
     pixel_value_string =
-        "Displayed value: (" + QString::number(qRed(last_pixel_value_)) +
-        ", " + QString::number(qGreen(last_pixel_value_)) +
-        ", " + QString::number(qBlue(last_pixel_value_)) + ")";
+        "Image value: " + QString::fromStdString(last_pixel_value_) + ", " +
+        "Displayed value: (" + QString::number(qRed(last_pixel_displayed_value_)) +
+        ", " + QString::number(qGreen(last_pixel_displayed_value_)) +
+        ", " + QString::number(qBlue(last_pixel_displayed_value_)) + ")";
   }
   QString cursor_pos_string;
   if (have_last_cursor_pos_) {
@@ -270,3 +374,5 @@ void ImageDisplayQtWindow::UpdateStatusBar() {
 }
 
 }
+
+#include "image_display_qt_window.moc"

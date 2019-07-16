@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -29,18 +29,45 @@
 
 #include "libvis/libvis.h"
 
+#include <thread>
+
+#ifdef LIBVIS_HAVE_QT
+#include <QApplication>
+#include <QSurfaceFormat>
+#endif
+
+#include "libvis/logging.h"
 #include "libvis/qt_thread.h"
 
 namespace vis {
 
-LibvisApplication::LibvisApplication() {
-  // Nothing yet.
+LibvisApplication::LibvisApplication(int argc, char** argv) {
+  // HACK before a solution is found to export loguru's symbols in Windows.
+  // This means that on Windows, loguru uses the default format.
+#ifndef WIN32
+  loguru::g_preamble_date = false;
+  loguru::g_preamble_thread = false;
+  loguru::g_preamble_uptime = false;
+  loguru::g_stderr_verbosity = 2;
+#endif
+  if (argc > 0) {
+    loguru::init(argc, argv, /*verbosity_flag*/ nullptr);
+  }
 }
 
-vis::LibvisApplication::~LibvisApplication() {
-#ifdef LIBVIS_HAVE_QT
-  QtThread::Instance()->Quit();
-#endif
+void LibvisApplication::SetDefaultQSurfaceFormat() {
+  // QSurfaceFormat default settings should be set before the QApplication is constructed.
+  // TODO: These settings here should be configurable by the application!
+  QSurfaceFormat surface_format;
+  surface_format.setVersion(3, 3);
+  surface_format.setProfile(QSurfaceFormat::CompatibilityProfile);
+  surface_format.setSamples(4);
+  surface_format.setAlphaBufferSize(8);
+  QSurfaceFormat::setDefaultFormat(surface_format);
+}
+
+int LibvisApplication::WrapQtEventLoopAround(int (*func)(int, char**), int argc, char** argv) {
+  return vis::WrapQtEventLoopAround(func, argc, argv);
 }
 
 }

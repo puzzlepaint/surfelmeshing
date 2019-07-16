@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -38,6 +38,9 @@ namespace vis {
 class CUDAUnprojectionLookup2D_ {
  friend class CUDAUnprojectionLookup2D;
  public:
+  __forceinline__ __host__ CUDAUnprojectionLookup2D_(cudaTextureObject_t lookup_texture)
+      : lookup_texture_(lookup_texture) {}
+  
   __forceinline__ __device__ float2 UnprojectPoint(float x, float y) const {
     return tex2D<float2>(lookup_texture_, x + 0.5f, y + 0.5f);
   }

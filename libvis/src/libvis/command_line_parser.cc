@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -32,10 +32,13 @@
 #include <iostream>
 #include <sstream>
 
+#include "libvis/logging.h"
+
 namespace vis {
 
 CommandLineParser::CommandLineParser(int argc, char** argv)
     : is_input_complete_(true),
+      sequential_parameter_read_(false),
       argc_(argc),
       argv_(argv) {
   value_used_.resize(argc_, false);
@@ -55,6 +58,8 @@ CommandLineParser::CommandLineParser(int argc, char** argv)
 }
 
 bool CommandLineParser::Flag(const char* name, const char* help) {
+  CHECK(!sequential_parameter_read_) << "Flags must be read before all sequential parameters";
+  
   parameters_.push_back(Parameter());
   parameters_.back().name = name;
   parameters_.back().is_flag = true;
@@ -75,6 +80,8 @@ bool CommandLineParser::Flag(const char* name, const char* help) {
 }
 
 bool CommandLineParser::NamedParameter(const char* name, string* value, bool required, const char* help) {
+  CHECK(!sequential_parameter_read_) << "NamedParameters must be read before all sequential parameters";
+  
   parameters_.push_back(Parameter());
   parameters_.back().name = name;
   parameters_.back().is_flag = false;
@@ -102,7 +109,64 @@ bool CommandLineParser::NamedParameter(const char* name, string* value, bool req
   return false;
 }
 
+bool CommandLineParser::NamedParameter(const char* name, vector<string>* value, char separator, bool required, const char* help) {
+  string raw_string;
+  if (!NamedParameter(name, &raw_string, required, help)) {
+    return false;
+  }
+  
+  value->clear();
+  string::size_type pos = 0;
+  while (true) {
+    const string::size_type separator_pos = raw_string.find(separator, pos);
+    if (separator_pos == string::npos) {
+      value->push_back(raw_string.substr(pos));
+      break;
+    } else {
+      value->push_back(raw_string.substr(pos, separator_pos - pos));
+      pos = separator_pos + 1;
+    }
+  }
+  
+  return true;
+}
+
+bool CommandLineParser::NamedPathParameter(const char* name, string* value, bool required, const char* help) {
+  CHECK(!sequential_parameter_read_) << "NamedParameters must be read before all sequential parameters";
+  
+  parameters_.push_back(Parameter());
+  parameters_.back().name = name;
+  parameters_.back().is_flag = false;
+  parameters_.back().is_sequential = false;
+  parameters_.back().required = required;
+  if (!required) {
+    parameters_.back().default_value = *value;
+  }
+  parameters_.back().given = false;
+  parameters_.back().help = help;
+  
+  string name_str = name;
+  for (int i = 1; i < argc_ - 1; ++ i) {
+    if (!value_used_[i] && !value_used_[i + 1] && name_str == argv_[i]) {
+      value_used_[i] = true;
+      value_used_[i + 1] = true;
+      *value = argv_[i + 1];
+      if (value->size() >= 7 && value->substr(0, 7) == "file://") {
+        *value = value->substr(7);
+      }
+      parameters_.back().given = true;
+      return true;
+    }
+  }
+  if (required) {
+    is_input_complete_ = false;
+  }
+  return false;
+}
+
 bool CommandLineParser::NamedParameter(const char* name, int* value, bool required, const char* help) {
+  CHECK(!sequential_parameter_read_) << "NamedParameters must be read before all sequential parameters";
+  
   parameters_.push_back(Parameter());
   parameters_.back().name = name;
   parameters_.back().is_flag = false;
@@ -133,6 +197,8 @@ bool CommandLineParser::NamedParameter(const char* name, int* value, bool requir
 }
 
 bool CommandLineParser::NamedParameter(const char* name, float* value, bool required, const char* help) {
+  CHECK(!sequential_parameter_read_) << "NamedParameters must be read before all sequential parameters";
+  
   parameters_.push_back(Parameter());
   parameters_.back().name = name;
   parameters_.back().is_flag = false;
@@ -163,6 +229,8 @@ bool CommandLineParser::NamedParameter(const char* name, float* value, bool requ
 }
 
 bool CommandLineParser::SequentialParameter(string* value, const char* name, bool required, const char* help) {
+  sequential_parameter_read_ = true;
+  
   parameters_.push_back(Parameter());
   parameters_.back().name = name;
   parameters_.back().is_flag = false;
@@ -178,6 +246,37 @@ bool CommandLineParser::SequentialParameter(string* value, const char* name, boo
     if (!value_used_[i]) {
       value_used_[i] = true;
       *value = argv_[i];
+      parameters_.back().given = true;
+      return true;
+    }
+  }
+  if (required) {
+    is_input_complete_ = false;
+  }
+  return false;
+}
+
+bool CommandLineParser::SequentialPathParameter(string* value, const char* name, bool required, const char* help) {
+  sequential_parameter_read_ = true;
+  
+  parameters_.push_back(Parameter());
+  parameters_.back().name = name;
+  parameters_.back().is_flag = false;
+  parameters_.back().is_sequential = true;
+  parameters_.back().required = required;
+  if (!required) {
+    parameters_.back().default_value = *value;
+  }
+  parameters_.back().given = false;
+  parameters_.back().help = help;
+  
+  for (int i = 1; i < argc_; ++ i) {
+    if (!value_used_[i]) {
+      value_used_[i] = true;
+      *value = argv_[i];
+      if (value->size() >= 7 && value->substr(0, 7) == "file://") {
+        *value = value->substr(7);
+      }
       parameters_.back().given = true;
       return true;
     }

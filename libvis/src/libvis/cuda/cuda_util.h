@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -30,7 +30,7 @@
 #pragma once
 
 #include <cuda_runtime.h>
-#include <glog/logging.h>
+#include "libvis/logging.h"
 
 #define CUDA_CHECKED_CALL(cuda_call)                                \
   do {                                                              \
@@ -104,9 +104,8 @@ namespace vis {
 
 // Returns the required number of CUDA blocks to cover a given domain size,
 // given a specific block size.
-inline int GetBlockCount(int domain_size, int block_size) {
-  const int div = domain_size / block_size;
-  return (domain_size % block_size == 0) ? div : (div + 1);
+__forceinline__ __host__ __device__ int GetBlockCount(int domain_size, int block_size) {
+  return ((domain_size - 1) / block_size) + 1;
 }
 
 }  // namespace vis

@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -27,7 +27,7 @@
 // POSSIBILITY OF SUCH DAMAGE.
 
 
-#include <glog/logging.h>
+#include "libvis/logging.h"
 #include <gtest/gtest.h>
 
 #include "libvis/image.h"
@@ -116,6 +116,20 @@ TEST(Image, InterpolateBilinear) {
   EXPECT_EQ(2.f, image.InterpolateBilinear(Vector2f(1, 0)));
   EXPECT_EQ(4.f, image.InterpolateBilinear(Vector2f(0, 1)));
   EXPECT_EQ(1.5f, image.InterpolateBilinear(Vector2f(0.5f, 0)));
+}
+
+// Tests bicubic interpolation.
+TEST(Image, InterpolateBicubic) {
+  Vec2f image_data[] = {
+      Vec2f(0, 0), Vec2f(0, 0), Vec2f(0, 0), Vec2f(0, 0),
+      Vec2f(0, 0), Vec2f(1, 1), Vec2f(2, 2), Vec2f(3, 3),
+      Vec2f(0, 0), Vec2f(4, 4), Vec2f(5, 5), Vec2f(6, 6),
+      Vec2f(0, 0), Vec2f(7, 7), Vec2f(8, 8), Vec2f(9, 9)};
+  Image<Vec2f> image(4, 4, image_data);
+  
+  EXPECT_EQ(Vec2f(1, 1), image.InterpolateBicubicVector(Vector2f(1, 1)));
+  EXPECT_EQ(Vec2f(2, 2), image.InterpolateBicubicVector(Vector2f(2, 1)));
+  EXPECT_EQ(Vec2f(4, 4), image.InterpolateBicubicVector(Vector2f(1, 2)));
 }
 
 // Tests downscaling to half size.

@@ -1,4 +1,4 @@
-// Copyright 2018 ETH Zürich, Thomas Schöps
+// Copyright 2017, 2019 ETH Zürich, Thomas Schöps
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -33,6 +33,12 @@
 
 #include <vector>
 
+
+#ifdef __CUDA_ARCH__
+#error "Compiling Eigen code with nvcc is not supported properly, therefore Eigen headers should not be included from .cu / .cuh files."
+#endif
+
+
 #pragma GCC diagnostic push
   #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
   #if __GNUC__ >= 7
@@ -46,6 +52,21 @@
 #pragma GCC diagnostic pop
 
 #include "libvis/libvis.h"
+
+
+// Specialize std::vector for common types for correct alignment without having to use aligned_vector.
+EIGEN_DEFINE_STL_VECTOR_SPECIALIZATION(Eigen::Vector2d);
+EIGEN_DEFINE_STL_VECTOR_SPECIALIZATION(Eigen::Vector4d);
+EIGEN_DEFINE_STL_VECTOR_SPECIALIZATION(Eigen::Vector4f);
+EIGEN_DEFINE_STL_VECTOR_SPECIALIZATION(Eigen::Matrix2d);
+EIGEN_DEFINE_STL_VECTOR_SPECIALIZATION(Eigen::Matrix2f);
+EIGEN_DEFINE_STL_VECTOR_SPECIALIZATION(Eigen::Matrix4d);
+EIGEN_DEFINE_STL_VECTOR_SPECIALIZATION(Eigen::Matrix4f);
+EIGEN_DEFINE_STL_VECTOR_SPECIALIZATION(Eigen::Affine3d);
+EIGEN_DEFINE_STL_VECTOR_SPECIALIZATION(Eigen::Affine3f);
+EIGEN_DEFINE_STL_VECTOR_SPECIALIZATION(Eigen::Quaterniond);
+EIGEN_DEFINE_STL_VECTOR_SPECIALIZATION(Eigen::Quaternionf);
+
 
 namespace vis {
 
@@ -126,16 +147,3 @@ EIGEN_MAKE_TYPEDEFS_ALL_SIZES(u8, u8)
 #undef EIGEN_MAKE_FIXED_TYPEDEFS
 
 }
-
-// Specialize std::vector for common types for correct alignment without having to use aligned_vector.
-EIGEN_DEFINE_STL_VECTOR_SPECIALIZATION(Eigen::Vector2d)
-EIGEN_DEFINE_STL_VECTOR_SPECIALIZATION(Eigen::Vector4d)
-EIGEN_DEFINE_STL_VECTOR_SPECIALIZATION(Eigen::Vector4f)
-EIGEN_DEFINE_STL_VECTOR_SPECIALIZATION(Eigen::Matrix2d)
-EIGEN_DEFINE_STL_VECTOR_SPECIALIZATION(Eigen::Matrix2f)
-EIGEN_DEFINE_STL_VECTOR_SPECIALIZATION(Eigen::Matrix4d)
-EIGEN_DEFINE_STL_VECTOR_SPECIALIZATION(Eigen::Matrix4f)
-EIGEN_DEFINE_STL_VECTOR_SPECIALIZATION(Eigen::Affine3d)
-EIGEN_DEFINE_STL_VECTOR_SPECIALIZATION(Eigen::Affine3f)
-EIGEN_DEFINE_STL_VECTOR_SPECIALIZATION(Eigen::Quaterniond)
-EIGEN_DEFINE_STL_VECTOR_SPECIALIZATION(Eigen::Quaternionf)
