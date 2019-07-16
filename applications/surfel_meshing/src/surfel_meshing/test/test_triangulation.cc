@@ -36,8 +36,6 @@
 using namespace vis;
 
 TEST(Triangulation, CheckSurfelState) {
-  LIBVIS_APPLICATION();
-  
   constexpr bool kShowVisualization = true;
   
   constexpr int kSurfelCount = 1000;
@@ -105,9 +103,14 @@ TEST(Triangulation, CheckSurfelState) {
   }
   
   if (kShowVisualization) {
-    shared_ptr<Point3fC3u8Cloud> visualization_cloud(new Point3fC3u8Cloud());
-    reconstruction.ConvertToPoint3fC3u8Cloud(visualization_cloud.get());
-    render_window->UpdateVisualizationCloud(visualization_cloud);
+    shared_ptr<Point3fCloud> visualization_cloud(new Point3fCloud());
+    reconstruction.ConvertToPoint3fCloud(visualization_cloud.get());
+    shared_ptr<Point3fC3u8Cloud> color_cloud(new Point3fC3u8Cloud(visualization_cloud->size()));
+    for (usize i = 0; i < visualization_cloud->size(); ++ i) {
+      color_cloud->at(i).position() = visualization_cloud->at(i).position();
+      color_cloud->at(i).color() = Vec3u8(0, 0, 0);
+    }
+    render_window->UpdateVisualizationCloud(color_cloud);
     
     shared_ptr<Mesh3fCu8> visualization_mesh(new Mesh3fCu8());
     reconstruction.ConvertToMesh3fCu8(visualization_mesh.get());
@@ -132,9 +135,14 @@ TEST(Triangulation, CheckSurfelState) {
   }
   
   if (kShowVisualization) {
-    shared_ptr<Point3fC3u8Cloud> visualization_cloud(new Point3fC3u8Cloud());
-    reconstruction.ConvertToPoint3fC3u8Cloud(visualization_cloud.get());
-    render_window->UpdateVisualizationCloud(visualization_cloud);
+    shared_ptr<Point3fCloud> visualization_cloud(new Point3fCloud());
+    reconstruction.ConvertToPoint3fCloud(visualization_cloud.get());
+    shared_ptr<Point3fC3u8Cloud> color_cloud(new Point3fC3u8Cloud(visualization_cloud->size()));
+    for (usize i = 0; i < visualization_cloud->size(); ++ i) {
+      color_cloud->at(i).position() = visualization_cloud->at(i).position();
+      color_cloud->at(i).color() = Vec3u8(0, 0, 0);
+    }
+    render_window->UpdateVisualizationCloud(color_cloud);
     
     shared_ptr<Mesh3fCu8> visualization_mesh(new Mesh3fCu8());
     reconstruction.ConvertToMesh3fCu8(visualization_mesh.get());
