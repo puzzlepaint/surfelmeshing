@@ -37,8 +37,31 @@ include_directories(${EIGEN3_INCLUDE_DIR})
 find_package(Boost COMPONENTS serialization filesystem system REQUIRED)
 include_directories(${Boost_INCLUDE_DIR})
 
-# GLog (external)
-find_package(Glog 0.3.4 REQUIRED)
+# Loguru (packaged)
+add_library(loguru SHARED
+  libvis/third_party/loguru/loguru.cpp
+)
+set_property(TARGET loguru PROPERTY FOLDER "libvis/third_party")
+target_include_directories(loguru PUBLIC
+  libvis/third_party/loguru/
+)
+set_target_properties(loguru PROPERTIES
+  POSITION_INDEPENDENT_CODE ON
+)
+target_compile_definitions(loguru PRIVATE
+  LOGURU_WITH_STREAMS
+)
+if(MSVC)
+  set(LOGURU_DLL_EXPORT "__declspec(dllexport)")
+  #set(LOGURU_DLL_IMPORT "__declspec(dllimport)")
+endif()
+target_compile_definitions(loguru PRIVATE
+  LOGURU_EXPORT=${LOGURU_DLL_EXPORT}
+)
+target_link_libraries(loguru
+  Threads::Threads
+  ${CMAKE_DL_LIBS}
+)
 
 # PCL (external)
 find_package(PCL 1.7 REQUIRED)
@@ -258,7 +281,7 @@ set(BASE_LIB_LIBRARIES
   ${Boost_LIBRARIES}
   ${GLEW_LIBRARIES}
   GL
-  glog
+  loguru
   Qt5::Widgets
   Qt5::X11Extras
   Qt5::OpenGL

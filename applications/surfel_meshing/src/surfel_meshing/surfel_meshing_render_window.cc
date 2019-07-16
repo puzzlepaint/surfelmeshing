@@ -35,9 +35,9 @@
 
 #include <GL/glew.h>
 #include <GL/glx.h>
-
-#include "surfel_meshing/cuda_surfel_reconstruction.cuh"
 #include <libvis/cuda/cuda_util.h>
+
+#include "surfel_meshing/cuda_surfel_reconstruction_kernels.cuh"
 
 namespace vis {
 

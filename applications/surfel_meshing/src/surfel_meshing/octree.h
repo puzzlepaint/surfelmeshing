@@ -31,7 +31,7 @@
 
 #include <unordered_set>
 
-#include <glog/logging.h>
+#include <libvis/logging.h>
 #include <libvis/eigen.h>
 #include <libvis/libvis.h>
 

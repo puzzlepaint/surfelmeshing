@@ -35,8 +35,9 @@
 
 #include <boost/filesystem.hpp>
 #include <cuda_runtime.h>
-#include <glog/logging.h>
+#include <libvis/logging.h>
 #include <libvis/command_line_parser.h>
+#include <libvis/cuda/cuda_buffer.h>
 #include <libvis/image_display.h>
 #include <libvis/libvis.h>
 #include <libvis/mesh_opengl.h>
@@ -50,17 +51,13 @@
 #include <libvis/shader_program_opengl.h>
 #include <libvis/sophus.h>
 #include <libvis/timing.h>
-#include <pcl/io/ply_io.h>
 #include <signal.h>
 #include <spline_library/splines/uniform_cr_spline.h>
 #include <termios.h>
 #include <unistd.h>
-#include <QApplication>
 
 #include "surfel_meshing/asynchronous_meshing.h"
-#include <libvis/cuda/cuda_buffer.h>
 #include "surfel_meshing/cuda_depth_processing.cuh"
-#include "surfel_meshing/cuda_surfel_reconstruction.cuh"
 #include "surfel_meshing/cuda_surfel_reconstruction.h"
 #include "surfel_meshing/surfel_meshing_render_window.h"
 #include "surfel_meshing/surfel.h"
@@ -172,25 +169,21 @@ bool SavePointCloudAsPLY(
     const std::string& export_point_cloud_path) {
   CHECK_EQ(surfel_meshing.surfels().size(), reconstruction.surfels_size());
   
-  Point3fC3u8Cloud cloud;
-  surfel_meshing.ConvertToPoint3fC3u8Cloud(&cloud);
+  Point3fCloud cloud;
+  surfel_meshing.ConvertToPoint3fCloud(&cloud);
   
-  pcl::PointCloud<pcl::PointNormal>::Ptr pcl_cloud(new pcl::PointCloud<pcl::PointNormal>());
-  pcl_cloud->resize(cloud.size());
+  Point3fC3u8NfCloud final_cloud(cloud.size());
   usize index = 0;
   for (usize i = 0; i < cloud.size(); ++ i) {
-    pcl_cloud->at(i).x = cloud[i].position().x();
-    pcl_cloud->at(i).y = cloud[i].position().y();
-    pcl_cloud->at(i).z = cloud[i].position().z();
+    final_cloud[i].position() = cloud[i].position();
+    final_cloud[i].color() = Vec3u8(255, 255, 255);  // TODO: Export colors as well.
     while (surfel_meshing.surfels()[index].node() == nullptr) {
       ++ index;
     }
-    pcl_cloud->at(i).normal_x = surfel_meshing.surfels()[index].normal().x();
-    pcl_cloud->at(i).normal_y = surfel_meshing.surfels()[index].normal().y();
-    pcl_cloud->at(i).normal_z = surfel_meshing.surfels()[index].normal().z();
+    final_cloud[i].normal() = surfel_meshing.surfels()[index].normal();
     ++ index;
   }
-  pcl::io::savePLYFileBinary(export_point_cloud_path, *pcl_cloud);
+  final_cloud.WriteAsPLY(export_point_cloud_path);
   LOG(INFO) << "Wrote " << export_point_cloud_path << ".";
   return true;
 }
@@ -245,12 +238,7 @@ void MedianFilterAndDensifyDepthMap(const Image<u16>& input, Image<u16>* output)
 }
 
 
-int main(int argc, char** argv) {
-  LIBVIS_APPLICATION();
-  
-  FLAGS_logtostderr = 1;
-  google::InitGoogleLogging(argv[0]);
-  
+int LIBVIS_MAIN(int argc, char** argv) {
   // Ignore SIGTTIN and SIGTTOU. I am not sure why they occurred: it seems that
   // they should only occur for background processes trying to interact with the
   // terminal, but they seemingly happened to me while there was no background
@@ -595,12 +583,11 @@ int main(int argc, char** argv) {
   // ### Initialization ###
   
   // Create render window.
-  shared_ptr<SurfelMeshingRenderWindow> render_window =
-      shared_ptr<SurfelMeshingRenderWindow>(
-          new SurfelMeshingRenderWindow(render_new_surfels_as_splats,
-                                        splat_half_extent_in_pixels,
-                                        triangle_normal_shading,
-                                        render_camera_frustum));
+  shared_ptr<SurfelMeshingRenderWindow> render_window(
+      new SurfelMeshingRenderWindow(render_new_surfels_as_splats,
+                                    splat_half_extent_in_pixels,
+                                    triangle_normal_shading,
+                                    render_camera_frustum));
   shared_ptr<RenderWindow> generic_render_window =
       RenderWindow::CreateWindow("SurfelMeshing", render_window_default_width, render_window_default_height, RenderWindow::API::kOpenGL, render_window);
   
@@ -813,7 +800,8 @@ int main(int argc, char** argv) {
       debug_normal_rendering,
       &neighbor_index_buffer_resource,
       &normal_vertex_buffer_resource);
-  OpenGLContext no_opengl_context = SwitchOpenGLContext(opengl_context);
+  OpenGLContext no_opengl_context;
+  SwitchOpenGLContext(opengl_context, &no_opengl_context);
   
   // Allocate reconstruction objects.
   CUDASurfelReconstruction reconstruction(
@@ -1004,8 +992,8 @@ int main(int argc, char** argv) {
         bilateral_filter_radius_factor,
         depth_scaling * max_depth,
         depth_valid_region_radius,
-        *depth_buffer,
-        &filtered_depth_buffer_A);
+        depth_buffer->ToCUDA(),
+        &filtered_depth_buffer_A.ToCUDA());
     cudaEventRecord(bilateral_filtering_post_event, stream);
     
     // DEBUG: Show bilateral filtering result.
@@ -1023,19 +1011,19 @@ int main(int argc, char** argv) {
     SE3f input_depth_frame_scaled_frame_T_global = input_depth_frame->frame_T_global();
     input_depth_frame_scaled_frame_T_global.translation() = depth_scaling * input_depth_frame_scaled_frame_T_global.translation();
     
-    const CUDABuffer<u16>* other_depths[outlier_filtering_frame_count];
+    const CUDABuffer_<u16>* other_depths[outlier_filtering_frame_count];
     SE3f global_TR_others[outlier_filtering_frame_count];
     CUDAMatrix3x4 others_TR_reference[outlier_filtering_frame_count];
     for (int i = 0; i < outlier_filtering_frame_count / 2; ++ i) {
       int offset = i + 1;
       
-      other_depths[i] = frame_index_to_depth_buffer.at(frame_index - offset).get();
+      other_depths[i] = &frame_index_to_depth_buffer.at(frame_index - offset)->ToCUDA();
       global_TR_others[i] = rgbd_video.depth_frame_mutable(frame_index - offset)->global_T_frame();
       global_TR_others[i].translation() = depth_scaling * global_TR_others[i].translation();
       others_TR_reference[i] = CUDAMatrix3x4((input_depth_frame_scaled_frame_T_global * global_TR_others[i]).inverse().matrix3x4());
       
       int k = outlier_filtering_frame_count / 2 + i;
-      other_depths[k] = frame_index_to_depth_buffer.at(frame_index + offset).get();
+      other_depths[k] = &frame_index_to_depth_buffer.at(frame_index + offset)->ToCUDA();
       global_TR_others[k] = rgbd_video.depth_frame_mutable(frame_index + offset)->global_T_frame();
       global_TR_others[k].translation() = depth_scaling * global_TR_others[k].translation();
       others_TR_reference[k] = CUDAMatrix3x4((input_depth_frame_scaled_frame_T_global * global_TR_others[k]).inverse().matrix3x4());
@@ -1048,11 +1036,14 @@ int main(int argc, char** argv) {
           OutlierDepthMapFusionCUDA<other_frame_count + 1, u16>( \
               stream, \
               outlier_filtering_depth_tolerance_factor, \
-              filtered_depth_buffer_A, \
-              depth_camera, \
+              filtered_depth_buffer_A.ToCUDA(), \
+              depth_camera.parameters()[0], \
+              depth_camera.parameters()[1], \
+              depth_camera.parameters()[2], \
+              depth_camera.parameters()[3], \
               other_depths, \
               others_TR_reference, \
-              &filtered_depth_buffer_B)
+              &filtered_depth_buffer_B.ToCUDA())
       if (outlier_filtering_frame_count == 2) {
         CALL_OUTLIER_FUSION(2);
       } else if (outlier_filtering_frame_count == 4) {
@@ -1072,11 +1063,14 @@ int main(int argc, char** argv) {
               stream, \
               outlier_filtering_required_inliers, \
               outlier_filtering_depth_tolerance_factor, \
-              filtered_depth_buffer_A, \
-              depth_camera, \
+              filtered_depth_buffer_A.ToCUDA(), \
+              depth_camera.parameters()[0], \
+              depth_camera.parameters()[1], \
+              depth_camera.parameters()[2], \
+              depth_camera.parameters()[3], \
               other_depths, \
               others_TR_reference, \
-              &filtered_depth_buffer_B)
+              &filtered_depth_buffer_B.ToCUDA())
       if (outlier_filtering_frame_count == 2) {
         CALL_OUTLIER_FUSION(2);
       } else if (outlier_filtering_frame_count == 4) {
@@ -1107,13 +1101,13 @@ int main(int argc, char** argv) {
       ErodeDepthMapCUDA(
           stream,
           depth_erosion_radius,
-          filtered_depth_buffer_B,
-          &filtered_depth_buffer_A);
+          filtered_depth_buffer_B.ToCUDA(),
+          &filtered_depth_buffer_A.ToCUDA());
     } else {
       CopyWithoutBorderCUDA(
           stream,
-          filtered_depth_buffer_B,
-          &filtered_depth_buffer_A);
+          filtered_depth_buffer_B.ToCUDA(),
+          &filtered_depth_buffer_A.ToCUDA());
     }
     
     cudaEventRecord(depth_erosion_post_event, stream);
@@ -1132,10 +1126,13 @@ int main(int argc, char** argv) {
         stream,
         observation_angle_threshold_deg,
         depth_scaling,
-        depth_camera,
-        filtered_depth_buffer_A,
-        &filtered_depth_buffer_B,
-        &normals_buffer);
+        depth_camera.parameters()[0],
+        depth_camera.parameters()[1],
+        depth_camera.parameters()[2],
+        depth_camera.parameters()[3],
+        filtered_depth_buffer_A.ToCUDA(),
+        &filtered_depth_buffer_B.ToCUDA(),
+        &normals_buffer.ToCUDA());
     
     cudaEventRecord(normal_computation_post_event, stream);
     
@@ -1156,10 +1153,13 @@ int main(int argc, char** argv) {
         point_radius_extension_factor,
         point_radius_clamp_factor,
         depth_scaling,
-        depth_camera,
-        filtered_depth_buffer_B,
-        &radius_buffer,
-        &filtered_depth_buffer_A);
+        depth_camera.parameters()[0],
+        depth_camera.parameters()[1],
+        depth_camera.parameters()[2],
+        depth_camera.parameters()[3],
+        filtered_depth_buffer_B.ToCUDA(),
+        &radius_buffer.ToCUDA(),
+        &filtered_depth_buffer_A.ToCUDA());
     
     
     // ### Loop closures ###

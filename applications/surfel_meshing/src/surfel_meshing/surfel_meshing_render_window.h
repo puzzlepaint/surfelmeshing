@@ -50,8 +50,6 @@
 
 #include "surfel_meshing/surfel_meshing.h"  // Must be included before any header that defines Bool
 
-#include <GL/glx.h>
-
 namespace vis {
 
 class SurfelMeshing;

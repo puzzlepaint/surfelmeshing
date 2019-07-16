@@ -1683,8 +1683,14 @@ continue_meshing:;
       shared_ptr<Mesh3fCu8> visualization_mesh(new Mesh3fCu8());
       ConvertToMesh3fCu8(visualization_mesh.get());
       
-      shared_ptr<Point3fC3u8Cloud> visualization_cloud(new Point3fC3u8Cloud());
-      ConvertToPoint3fC3u8Cloud(visualization_cloud.get());
+      shared_ptr<Point3fCloud> visualization_cloud(new Point3fCloud());
+      ConvertToPoint3fCloud(visualization_cloud.get());
+      
+      shared_ptr<Point3fC3u8Cloud> visualization_cloud_2(new Point3fC3u8Cloud(visualization_cloud->size()));
+      for (usize i = 0; i < visualization_cloud->size(); ++ i) {
+        (*visualization_cloud_2)[i].position() = (*visualization_cloud)[i].position();
+        (*visualization_cloud_2)[i].color() = Vec3u8(0, 0, 0);
+      }
       
       (*visualization_mesh->vertices_mutable())->at(surfel_index).color() = Vec3u8(255, 60, 60);
       for (int i = 0; i < static_cast<int>(selected_neighbor_count); ++ i) {
@@ -1696,11 +1702,11 @@ continue_meshing:;
                   << " - " << kDebugColorNames[i % kDebugColorCount]
                   << ((i >= kDebugColorCount) ? " (warning: duplicate color, consider adding more)" : "");
         (*visualization_mesh->vertices_mutable())->at(selected_neighbors[i].surfel_index).color() = kDebugColors[i % kDebugColorCount];
-        visualization_cloud->at(selected_neighbors[i].surfel_index).color() = kDebugColors[i % kDebugColorCount];
+        visualization_cloud_2->at(selected_neighbors[i].surfel_index).color() = kDebugColors[i % kDebugColorCount];
       }
       
       render_window_->UpdateVisualizationMesh(visualization_mesh);
-      render_window_->UpdateVisualizationCloud(visualization_cloud);
+      render_window_->UpdateVisualizationCloud(visualization_cloud_2);
       std::getchar();
     }
     
@@ -2798,7 +2804,7 @@ void SurfelMeshing::ResetSurfelToFree(u32 surfel_index) {
   surfel->SetCanBeReset(false);
 }
 
-void SurfelMeshing::ConvertToPoint3fC3u8Cloud(Point3fC3u8Cloud* output) {
+void SurfelMeshing::ConvertToPoint3fCloud(Point3fCloud* output) {
   output->Resize(surfels_.size() - merged_surfel_count_);
   usize index = 0;
   for (usize i = 0, size = surfels_.size(); i < size; ++ i) {
@@ -2806,8 +2812,7 @@ void SurfelMeshing::ConvertToPoint3fC3u8Cloud(Point3fC3u8Cloud* output) {
     if (surfel.node() == nullptr) {
       continue;
     }
-    (*output)[index] = Point3fC3u8(
-        surfel.position(), Vec3u8(0, 0, 0));
+    (*output)[index] = Point3f(surfel.position());
     ++ index;
   }
   CHECK_EQ(index, output->size());
@@ -2830,8 +2835,14 @@ void SurfelMeshing::ConvertToMesh3fCu8(Mesh3fCu8* output, bool indices_only) {
   } else {
     // Vertices.
     if (!indices_only) {
-      output->vertices_mutable()->reset(new Point3fC3u8Cloud());
-      ConvertToPoint3fC3u8Cloud(output->vertices().get());
+      shared_ptr<Point3fCloud> visualization_cloud(new Point3fCloud());
+      ConvertToPoint3fCloud(visualization_cloud.get());
+      
+      output->vertices_mutable()->reset(new Point3fC3u8Cloud(visualization_cloud->size()));
+      for (usize i = 0; i < visualization_cloud->size(); ++ i) {
+        (*output->vertices_mutable())->at(i).position() = (*visualization_cloud)[i].position();
+        (*output->vertices_mutable())->at(i).color() = Vec3u8(0, 0, 0);
+      }
     }
     
     std::vector<usize> index_remapping(surfels_.size());

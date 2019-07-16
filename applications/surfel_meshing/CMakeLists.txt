@@ -1,14 +1,15 @@
 cuda_add_executable(SurfelMeshing
   src/surfel_meshing/asynchronous_meshing.cc
   src/surfel_meshing/asynchronous_meshing.h
-  src/surfel_meshing/cuda_matrix.cuh
   src/surfel_meshing/cuda_util.cuh
   src/surfel_meshing/cuda_depth_processing.cu
   src/surfel_meshing/cuda_depth_processing.cuh
-  src/surfel_meshing/cuda_surfel_reconstruction.cu
-  src/surfel_meshing/cuda_surfel_reconstruction.cuh
   src/surfel_meshing/cuda_surfel_reconstruction.cc
   src/surfel_meshing/cuda_surfel_reconstruction.h
+  src/surfel_meshing/cuda_surfel_reconstruction_kernels.cc
+  src/surfel_meshing/cuda_surfel_reconstruction_kernels.cu
+  src/surfel_meshing/cuda_surfel_reconstruction_kernels.cuh
+  src/surfel_meshing/cuda_surfel_reconstruction_kernels.h
   src/surfel_meshing/main.cc
   src/surfel_meshing/octree.cc
   src/surfel_meshing/octree.h
@@ -24,7 +25,6 @@ target_include_directories(SurfelMeshing PRIVATE
   third_party/cub-1.7.4
 )
 target_link_libraries(SurfelMeshing gmp ${PCL_LIBRARIES} libvis_cuda ${BASE_LIB_LIBRARIES} X11)
-
 
 # Tests.
 add_executable(SurfelMeshing_Octree_Test

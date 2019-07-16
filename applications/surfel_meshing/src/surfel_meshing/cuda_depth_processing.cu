@@ -34,6 +34,7 @@
 
 #include "surfel_meshing/cuda_depth_processing.cuh"
 
+#include <libvis/cuda/cuda_util.h>
 #include <math_constants.h>
 
 #include "surfel_meshing/cuda_util.cuh"
@@ -121,8 +122,8 @@ void BilateralFilteringAndDepthCutoffCUDA(
     float radius_factor,
     u16 max_depth,
     float depth_valid_region_radius,
-    const CUDABuffer<u16>& input_depth,
-    CUDABuffer<u16>* output_depth) {
+    const CUDABuffer_<u16>& input_depth,
+    CUDABuffer_<u16>* output_depth) {
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
   #endif
@@ -145,8 +146,8 @@ void BilateralFilteringAndDepthCutoffCUDA(
       value_to_ignore,
       max_depth,
       depth_valid_region_radius * depth_valid_region_radius,
-      input_depth.ToCUDA(),
-      output_depth->ToCUDA());
+      input_depth,
+      *output_depth);
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
   #endif
@@ -226,11 +227,14 @@ template <int count, typename DepthT>
 void OutlierDepthMapFusionCUDA(
     cudaStream_t stream,
     float tolerance,
-    const CUDABuffer<DepthT>& input_depth,
-    const PinholeCamera4f& depth_camera,
-    const CUDABuffer<DepthT>** other_depths,
+    const CUDABuffer_<DepthT>& input_depth,
+    float depth_fx,
+    float depth_fy,
+    float depth_cx,
+    float depth_cy,
+    const CUDABuffer_<DepthT>** other_depths,
     const CUDAMatrix3x4* others_TR_reference,
-    CUDABuffer<u16>* output_depth) {
+    CUDABuffer_<u16>* output_depth) {
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
   #endif
@@ -242,25 +246,19 @@ void OutlierDepthMapFusionCUDA(
   for (int i = 0; i < kOtherCount; ++ i) {
     p.other_TR_reference[i] = others_TR_reference[i];
     
-    p.other_depths[i] = other_depths[i]->ToCUDA();
+    p.other_depths[i] = *other_depths[i];
   }
   
   const float max_tolerance_factor = 1 + tolerance;
   const float min_tolerance_factor = 1 - tolerance;
   
-  // Projection intrinsics for pixel corner convention.
-  const float fx = depth_camera.parameters()[0];
-  const float fy = depth_camera.parameters()[1];
-  const float cx = depth_camera.parameters()[2];
-  const float cy = depth_camera.parameters()[3];
-  
   // Unprojection intrinsics for pixel center convention.
-  const float fx_inv = 1.0f / fx;
-  const float fy_inv = 1.0f / fy;
-  const float cx_pixel_center = cx - 0.5f;
-  const float cy_pixel_center = cy - 0.5f;
-  const float cx_inv_pixel_center = -cx_pixel_center / fx;
-  const float cy_inv_pixel_center = -cy_pixel_center / fy;
+  const float fx_inv = 1.0f / depth_fx;
+  const float fy_inv = 1.0f / depth_fy;
+  const float cx_pixel_center = depth_cx - 0.5f;
+  const float cy_pixel_center = depth_cy - 0.5f;
+  const float cx_inv_pixel_center = -cx_pixel_center / depth_fx;
+  const float cy_inv_pixel_center = -cy_pixel_center / depth_fy;
   
   constexpr int kBlockWidth = 32;
   constexpr int kBlockHeight = 32;
@@ -272,11 +270,11 @@ void OutlierDepthMapFusionCUDA(
   <<<grid_dim, block_dim, 0, stream>>>(
       max_tolerance_factor,
       min_tolerance_factor,
-      input_depth.ToCUDA(),
-      fx, fy, cx, cy,
+      input_depth,
+      depth_fx, depth_fy, depth_cx, depth_cy,
       fx_inv, fy_inv, cx_inv_pixel_center, cy_inv_pixel_center,
       p,
-      output_depth->ToCUDA());
+      *output_depth);
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
   #endif
@@ -287,38 +285,50 @@ template
 void OutlierDepthMapFusionCUDA<9, u16>(
     cudaStream_t stream,
     float tolerance,
-    const CUDABuffer<u16>& input_depth,
-    const PinholeCamera4f& depth_camera,
-    const CUDABuffer<u16>** other_depths,
+    const CUDABuffer_<u16>& input_depth,
+    float depth_fx,
+    float depth_fy,
+    float depth_cx,
+    float depth_cy,
+    const CUDABuffer_<u16>** other_depths,
     const CUDAMatrix3x4* others_TR_reference,
-    CUDABuffer<u16>* output_depth);
+    CUDABuffer_<u16>* output_depth);
 template
 void OutlierDepthMapFusionCUDA<7, u16>(
     cudaStream_t stream,
     float tolerance,
-    const CUDABuffer<u16>& input_depth,
-    const PinholeCamera4f& depth_camera,
-    const CUDABuffer<u16>** other_depths,
+    const CUDABuffer_<u16>& input_depth,
+    float depth_fx,
+    float depth_fy,
+    float depth_cx,
+    float depth_cy,
+    const CUDABuffer_<u16>** other_depths,
     const CUDAMatrix3x4* others_TR_reference,
-    CUDABuffer<u16>* output_depth);
+    CUDABuffer_<u16>* output_depth);
 template
 void OutlierDepthMapFusionCUDA<5, u16>(
     cudaStream_t stream,
     float tolerance,
-    const CUDABuffer<u16>& input_depth,
-    const PinholeCamera4f& depth_camera,
-    const CUDABuffer<u16>** other_depths,
+    const CUDABuffer_<u16>& input_depth,
+    float depth_fx,
+    float depth_fy,
+    float depth_cx,
+    float depth_cy,
+    const CUDABuffer_<u16>** other_depths,
     const CUDAMatrix3x4* others_TR_reference,
-    CUDABuffer<u16>* output_depth);
+    CUDABuffer_<u16>* output_depth);
 template
 void OutlierDepthMapFusionCUDA<3, u16>(
     cudaStream_t stream,
     float tolerance,
-    const CUDABuffer<u16>& input_depth,
-    const PinholeCamera4f& depth_camera,
-    const CUDABuffer<u16>** other_depths,
+    const CUDABuffer_<u16>& input_depth,
+    float depth_fx,
+    float depth_fy,
+    float depth_cx,
+    float depth_cy,
+    const CUDABuffer_<u16>** other_depths,
     const CUDAMatrix3x4* others_TR_reference,
-    CUDABuffer<u16>* output_depth);
+    CUDABuffer_<u16>* output_depth);
 
 
 template <int count, typename DepthT>
@@ -388,11 +398,14 @@ void OutlierDepthMapFusionCUDA(
     cudaStream_t stream,
     int required_count,
     float tolerance,
-    const CUDABuffer<DepthT>& input_depth,
-    const PinholeCamera4f& depth_camera,
-    const CUDABuffer<DepthT>** other_depths,
+    const CUDABuffer_<DepthT>& input_depth,
+    float depth_fx,
+    float depth_fy,
+    float depth_cx,
+    float depth_cy,
+    const CUDABuffer_<DepthT>** other_depths,
     const CUDAMatrix3x4* others_TR_reference,
-    CUDABuffer<u16>* output_depth) {
+    CUDABuffer_<u16>* output_depth) {
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
   #endif
@@ -404,25 +417,19 @@ void OutlierDepthMapFusionCUDA(
   for (int i = 0; i < kOtherCount; ++ i) {
     p.other_TR_reference[i] = others_TR_reference[i];
     
-    p.other_depths[i] = other_depths[i]->ToCUDA();
+    p.other_depths[i] = *other_depths[i];
   }
   
   const float max_tolerance_factor = 1 + tolerance;
   const float min_tolerance_factor = 1 - tolerance;
   
-  // Projection intrinsics for pixel corner convention.
-  const float fx = depth_camera.parameters()[0];
-  const float fy = depth_camera.parameters()[1];
-  const float cx = depth_camera.parameters()[2];
-  const float cy = depth_camera.parameters()[3];
-  
   // Unprojection intrinsics for pixel center convention.
-  const float fx_inv = 1.0f / fx;
-  const float fy_inv = 1.0f / fy;
-  const float cx_pixel_center = cx - 0.5f;
-  const float cy_pixel_center = cy - 0.5f;
-  const float cx_inv_pixel_center = -cx_pixel_center / fx;
-  const float cy_inv_pixel_center = -cy_pixel_center / fy;
+  const float fx_inv = 1.0f / depth_fx;
+  const float fy_inv = 1.0f / depth_fy;
+  const float cx_pixel_center = depth_cx - 0.5f;
+  const float cy_pixel_center = depth_cy - 0.5f;
+  const float cx_inv_pixel_center = -cx_pixel_center / depth_fx;
+  const float cy_inv_pixel_center = -cy_pixel_center / depth_fy;
   
   constexpr int kBlockWidth = 32;
   constexpr int kBlockHeight = 32;
@@ -435,11 +442,11 @@ void OutlierDepthMapFusionCUDA(
       required_count,
       max_tolerance_factor,
       min_tolerance_factor,
-      input_depth.ToCUDA(),
-      fx, fy, cx, cy,
+      input_depth,
+      depth_fx, depth_fy, depth_cx, depth_cy,
       fx_inv, fy_inv, cx_inv_pixel_center, cy_inv_pixel_center,
       p,
-      output_depth->ToCUDA());
+      *output_depth);
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
   #endif
@@ -451,41 +458,53 @@ void OutlierDepthMapFusionCUDA<9, u16>(
     cudaStream_t stream,
     int required_count,
     float tolerance,
-    const CUDABuffer<u16>& input_depth,
-    const PinholeCamera4f& depth_camera,
-    const CUDABuffer<u16>** other_depths,
+    const CUDABuffer_<u16>& input_depth,
+    float depth_fx,
+    float depth_fy,
+    float depth_cx,
+    float depth_cy,
+    const CUDABuffer_<u16>** other_depths,
     const CUDAMatrix3x4* others_TR_reference,
-    CUDABuffer<u16>* output_depth);
+    CUDABuffer_<u16>* output_depth);
 template
 void OutlierDepthMapFusionCUDA<7, u16>(
     cudaStream_t stream,
     int required_count,
     float tolerance,
-    const CUDABuffer<u16>& input_depth,
-    const PinholeCamera4f& depth_camera,
-    const CUDABuffer<u16>** other_depths,
+    const CUDABuffer_<u16>& input_depth,
+    float depth_fx,
+    float depth_fy,
+    float depth_cx,
+    float depth_cy,
+    const CUDABuffer_<u16>** other_depths,
     const CUDAMatrix3x4* others_TR_reference,
-    CUDABuffer<u16>* output_depth);
+    CUDABuffer_<u16>* output_depth);
 template
 void OutlierDepthMapFusionCUDA<5, u16>(
     cudaStream_t stream,
     int required_count,
     float tolerance,
-    const CUDABuffer<u16>& input_depth,
-    const PinholeCamera4f& depth_camera,
-    const CUDABuffer<u16>** other_depths,
+    const CUDABuffer_<u16>& input_depth,
+    float depth_fx,
+    float depth_fy,
+    float depth_cx,
+    float depth_cy,
+    const CUDABuffer_<u16>** other_depths,
     const CUDAMatrix3x4* others_TR_reference,
-    CUDABuffer<u16>* output_depth);
+    CUDABuffer_<u16>* output_depth);
 template
 void OutlierDepthMapFusionCUDA<3, u16>(
     cudaStream_t stream,
     int required_count,
     float tolerance,
-    const CUDABuffer<u16>& input_depth,
-    const PinholeCamera4f& depth_camera,
-    const CUDABuffer<u16>** other_depths,
+    const CUDABuffer_<u16>& input_depth,
+    float depth_fx,
+    float depth_fy,
+    float depth_cx,
+    float depth_cy,
+    const CUDABuffer_<u16>** other_depths,
     const CUDAMatrix3x4* others_TR_reference,
-    CUDABuffer<u16>* output_depth);
+    CUDABuffer_<u16>* output_depth);
 
 
 // TODO: This is potentially faster using a box filter.
@@ -519,8 +538,8 @@ template <typename DepthT>
 void ErodeDepthMapCUDA(
     cudaStream_t stream,
     int radius,
-    const CUDABuffer<DepthT>& input_depth,
-    CUDABuffer<DepthT>* output_depth) {
+    const CUDABuffer_<DepthT>& input_depth,
+    CUDABuffer_<DepthT>* output_depth) {
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
   #endif
@@ -535,18 +554,18 @@ void ErodeDepthMapCUDA(
   if (radius == 1) {
     ErodeDepthMapCUDAKernel<1, DepthT>
     <<<grid_dim, block_dim, 0, stream>>>(
-        input_depth.ToCUDA(),
-        output_depth->ToCUDA());
+        input_depth,
+        *output_depth);
   } else if (radius == 2) {
     ErodeDepthMapCUDAKernel<2, DepthT>
     <<<grid_dim, block_dim, 0, stream>>>(
-        input_depth.ToCUDA(),
-        output_depth->ToCUDA());
+        input_depth,
+        *output_depth);
   } else if (radius == 3) {
     ErodeDepthMapCUDAKernel<3, DepthT>
     <<<grid_dim, block_dim, 0, stream>>>(
-        input_depth.ToCUDA(),
-        output_depth->ToCUDA());
+        input_depth,
+        *output_depth);
   } else {
     LOG(FATAL) << "radius value of " << radius << " is not supported.";
   }
@@ -560,8 +579,8 @@ template
 void ErodeDepthMapCUDA<u16>(
     cudaStream_t stream,
     int radius,
-    const CUDABuffer<u16>& input_depth,
-    CUDABuffer<u16>* output_depth);
+    const CUDABuffer_<u16>& input_depth,
+    CUDABuffer_<u16>* output_depth);
 
 
 template <typename DepthT>
@@ -587,8 +606,8 @@ __global__ void CopyWithoutBorderCUDAKernel(
 template <typename DepthT>
 void CopyWithoutBorderCUDA(
     cudaStream_t stream,
-    const CUDABuffer<DepthT>& input_depth,
-    CUDABuffer<DepthT>* output_depth) {
+    const CUDABuffer_<DepthT>& input_depth,
+    CUDABuffer_<DepthT>* output_depth) {
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
   #endif
@@ -602,8 +621,8 @@ void CopyWithoutBorderCUDA(
   
   CopyWithoutBorderCUDAKernel<DepthT>
   <<<grid_dim, block_dim, 0, stream>>>(
-      input_depth.ToCUDA(),
-      output_depth->ToCUDA());
+      input_depth,
+      *output_depth);
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
   #endif
@@ -613,8 +632,8 @@ void CopyWithoutBorderCUDA(
 template
 void CopyWithoutBorderCUDA<u16>(
     cudaStream_t stream,
-    const CUDABuffer<u16>& input_depth,
-    CUDABuffer<u16>* output_depth);
+    const CUDABuffer_<u16>& input_depth,
+    CUDABuffer_<u16>* output_depth);
 
 
 __global__ void ComputeNormalsAndDropBadPixelsCUDAKernel(
@@ -699,27 +718,25 @@ void ComputeNormalsAndDropBadPixelsCUDA(
     cudaStream_t stream,
     float observation_angle_threshold_deg,
     float depth_scaling,
-    const PinholeCamera4f& depth_camera,
-    const CUDABuffer<u16>& in_depth,
-    CUDABuffer<u16>* out_depth,
-    CUDABuffer<float2>* out_normals) {
+    float depth_fx,
+    float depth_fy,
+    float depth_cx,
+    float depth_cy,
+    const CUDABuffer_<u16>& in_depth,
+    CUDABuffer_<u16>* out_depth,
+    CUDABuffer_<float2>* out_normals) {
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
   #endif
   CHECK_CUDA_NO_ERROR();
   
-  const float fx = depth_camera.parameters()[0];
-  const float fy = depth_camera.parameters()[1];
-  const float cx = depth_camera.parameters()[2];
-  const float cy = depth_camera.parameters()[3];
-  
   // Unprojection intrinsics for pixel center convention.
-  const float fx_inv = 1.0f / fx;
-  const float fy_inv = 1.0f / fy;
-  const float cx_pixel_center = cx - 0.5f;
-  const float cy_pixel_center = cy - 0.5f;
-  const float cx_inv_pixel_center = -cx_pixel_center / fx;
-  const float cy_inv_pixel_center = -cy_pixel_center / fy;
+  const float fx_inv = 1.0f / depth_fx;
+  const float fy_inv = 1.0f / depth_fy;
+  const float cx_pixel_center = depth_cx - 0.5f;
+  const float cy_pixel_center = depth_cy - 0.5f;
+  const float cx_inv_pixel_center = -cx_pixel_center / depth_fx;
+  const float cy_inv_pixel_center = -cy_pixel_center / depth_fy;
   
   constexpr int kBlockWidth = 32;
   constexpr int kBlockHeight = 32;
@@ -732,9 +749,9 @@ void ComputeNormalsAndDropBadPixelsCUDA(
       -1 * cosf(M_PI / 180.f * observation_angle_threshold_deg),
       1.0f / depth_scaling,
       fx_inv, fy_inv, cx_inv_pixel_center, cy_inv_pixel_center,
-      in_depth.ToCUDA(),
-      out_depth->ToCUDA(),
-      out_normals->ToCUDA());
+      in_depth,
+      *out_depth,
+      *out_normals);
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
   #endif
@@ -821,27 +838,25 @@ void ComputePointRadiiAndRemoveIsolatedPixelsCUDA(
     float point_radius_extension_factor,
     float point_radius_clamp_factor,
     float depth_scaling,
-    const PinholeCamera4f& depth_camera,
-    const CUDABuffer<u16>& depth_buffer,
-    CUDABuffer<float>* radius_buffer,
-    CUDABuffer<u16>* out_depth) {
+    float depth_fx,
+    float depth_fy,
+    float depth_cx,
+    float depth_cy,
+    const CUDABuffer_<u16>& depth_buffer,
+    CUDABuffer_<float>* radius_buffer,
+    CUDABuffer_<u16>* out_depth) {
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
   #endif
   CHECK_CUDA_NO_ERROR();
   
-  const float fx = depth_camera.parameters()[0];
-  const float fy = depth_camera.parameters()[1];
-  const float cx = depth_camera.parameters()[2];
-  const float cy = depth_camera.parameters()[3];
-  
   // Unprojection intrinsics for pixel center convention.
-  const float fx_inv = 1.0f / fx;
-  const float fy_inv = 1.0f / fy;
-  const float cx_pixel_center = cx - 0.5f;
-  const float cy_pixel_center = cy - 0.5f;
-  const float cx_inv_pixel_center = -cx_pixel_center / fx;
-  const float cy_inv_pixel_center = -cy_pixel_center / fy;
+  const float fx_inv = 1.0f / depth_fx;
+  const float fy_inv = 1.0f / depth_fy;
+  const float cx_pixel_center = depth_cx - 0.5f;
+  const float cy_pixel_center = depth_cy - 0.5f;
+  const float cx_inv_pixel_center = -cx_pixel_center / depth_fx;
+  const float cy_inv_pixel_center = -cy_pixel_center / depth_fy;
   
   constexpr int kBlockWidth = 32;
   constexpr int kBlockHeight = 32;
@@ -855,9 +870,9 @@ void ComputePointRadiiAndRemoveIsolatedPixelsCUDA(
       point_radius_clamp_factor * point_radius_clamp_factor * sqrtf(2) * sqrtf(2),
       1.0f / depth_scaling,
       fx_inv, fy_inv, cx_inv_pixel_center, cy_inv_pixel_center,
-      depth_buffer.ToCUDA(),
-      radius_buffer->ToCUDA(),
-      out_depth->ToCUDA());
+      depth_buffer,
+      *radius_buffer,
+      *out_depth);
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
   #endif

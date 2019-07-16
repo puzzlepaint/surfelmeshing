@@ -30,14 +30,9 @@
 #pragma once
 
 #include <cuda_runtime.h>
-
-#include <libvis/camera.h>
 #include <libvis/libvis.h>
-#include <libvis/sophus.h>
-
-#include <libvis/cuda/cuda_buffer.h>
-
-#include "surfel_meshing/cuda_matrix.cuh"
+#include <libvis/cuda/cuda_buffer.cuh>
+#include <libvis/cuda/cuda_matrix.cuh>
 
 namespace vis {
 
@@ -53,19 +48,22 @@ void BilateralFilteringAndDepthCutoffCUDA(
     float radius_factor,
     u16 max_depth,
     float depth_valid_region_radius,
-    const CUDABuffer<u16>& input_depth,
-    CUDABuffer<u16>* output_depth);
+    const CUDABuffer_<u16>& input_depth,
+    CUDABuffer_<u16>* output_depth);
 
 // Requires to observe a depth value in all other frames to accept it as inlier.
 template <int count, typename DepthT>
 void OutlierDepthMapFusionCUDA(
     cudaStream_t stream,
     float tolerance,
-    const CUDABuffer<DepthT>& input_depth,
-    const PinholeCamera4f& depth_camera,
-    const CUDABuffer<DepthT>** other_depths,
+    const CUDABuffer_<DepthT>& input_depth,
+    float depth_fx,
+    float depth_fy,
+    float depth_cx,  // using pixel corner convention
+    float depth_cy,  // using pixel corner convention
+    const CUDABuffer_<DepthT>** other_depths,
     const CUDAMatrix3x4* others_TR_reference,
-    CUDABuffer<u16>* output_depth);
+    CUDABuffer_<u16>* output_depth);
 
 // Variant of OutlierDepthMapFusionCUDA() which does not require to observe a depth value in all other frames.
 template <int count, typename DepthT>
@@ -73,24 +71,27 @@ void OutlierDepthMapFusionCUDA(
     cudaStream_t stream,
     int required_count,
     float tolerance,
-    const CUDABuffer<DepthT>& input_depth,
-    const PinholeCamera4f& depth_camera,
-    const CUDABuffer<DepthT>** other_depths,
+    const CUDABuffer_<DepthT>& input_depth,
+    float depth_fx,
+    float depth_fy,
+    float depth_cx,  // using pixel corner convention
+    float depth_cy,  // using pixel corner convention
+    const CUDABuffer_<DepthT>** other_depths,
     const CUDAMatrix3x4* others_TR_reference,
-    CUDABuffer<u16>* output_depth);
+    CUDABuffer_<u16>* output_depth);
 
 template <typename DepthT>
 void ErodeDepthMapCUDA(
     cudaStream_t stream,
     int radius,
-    const CUDABuffer<DepthT>& input_depth,
-    CUDABuffer<DepthT>* output_depth);
+    const CUDABuffer_<DepthT>& input_depth,
+    CUDABuffer_<DepthT>* output_depth);
 
 template <typename DepthT>
 void CopyWithoutBorderCUDA(
     cudaStream_t stream,
-    const CUDABuffer<DepthT>& input_depth,
-    CUDABuffer<DepthT>* output_depth);
+    const CUDABuffer_<DepthT>& input_depth,
+    CUDABuffer_<DepthT>* output_depth);
 
 // This essentially erodes the depth map by another 1px.
 // Assumes that no valid depth values exist at the border of the image (or will
@@ -99,19 +100,25 @@ void ComputeNormalsAndDropBadPixelsCUDA(
     cudaStream_t stream,
     float observation_angle_threshold_deg,
     float depth_scaling,
-    const PinholeCamera4f& depth_camera,
-    const CUDABuffer<u16>& in_depth,
-    CUDABuffer<u16>* out_depth,
-    CUDABuffer<float2>* out_normals);  // TODO: Compress to char2?
+    float depth_fx,
+    float depth_fy,
+    float depth_cx,  // using pixel corner convention
+    float depth_cy,  // using pixel corner convention
+    const CUDABuffer_<u16>& in_depth,
+    CUDABuffer_<u16>* out_depth,
+    CUDABuffer_<float2>* out_normals);  // TODO: Compress to char2?
 
 void ComputePointRadiiAndRemoveIsolatedPixelsCUDA(
     cudaStream_t stream,
     float point_radius_extension_factor,
     float point_radius_clamp_factor,
     float depth_scaling,
-    const PinholeCamera4f& depth_camera,
-    const CUDABuffer<u16>& depth_buffer,
-    CUDABuffer<float>* radius_buffer,
-    CUDABuffer<u16>* out_depth);
+    float depth_fx,
+    float depth_fy,
+    float depth_cx,  // using pixel corner convention
+    float depth_cy,  // using pixel corner convention
+    const CUDABuffer_<u16>& depth_buffer,
+    CUDABuffer_<float>* radius_buffer,
+    CUDABuffer_<u16>* out_depth);
 
 }

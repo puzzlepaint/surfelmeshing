@@ -35,7 +35,8 @@
 #include <libvis/timing.h>
 
 #include "surfel_meshing/cuda_depth_processing.cuh"
-#include "surfel_meshing/cuda_surfel_reconstruction.cuh"
+#include "surfel_meshing/cuda_surfel_reconstruction_kernels.cuh"
+#include "surfel_meshing/cuda_surfel_reconstruction_kernels.h"
 #include "surfel_meshing/surfel.h"
 
 namespace vis {
@@ -300,7 +301,7 @@ void CUDASurfelReconstruction::Integrate(
         regularizer_weight,
         regularization_frame_window_size,
         surfel_count_,
-        surfels_.get());
+        &surfels_->ToCUDA());
   } else {
     for (int i = 0; i < regularization_iterations_per_integration_iteration; ++ i) {
       RegularizeSurfelsCUDA(
@@ -311,7 +312,7 @@ void CUDASurfelReconstruction::Integrate(
           regularizer_weight,
           regularization_frame_window_size,
           surfel_count_,
-          surfels_.get());
+          &surfels_->ToCUDA());
     }
   }
   
@@ -332,7 +333,7 @@ void CUDASurfelReconstruction::Regularize(
       regularizer_weight,
       regularization_frame_window_size,
       surfel_count_,
-      surfels_.get());
+      &surfels_->ToCUDA());
 }
 
 void CUDASurfelReconstruction::TransferAllToCPU(
@@ -367,15 +368,18 @@ void CUDASurfelReconstruction::UpdateVisualizationBuffers(
     bool visualize_creation_timestamp,
     bool visualize_radii,
     bool visualize_normals) {
+  CHECK(sizeof(Point3fC3u8) % sizeof(float) == 0);
+  u32 point_size_in_floats = sizeof(Point3fC3u8) / sizeof(float);
   UpdateSurfelVertexBufferCUDA(
       stream,
       frame_index,
       surfel_integration_active_window_size,
       surfel_count_,
-      *surfels_,
+      surfels_->ToCUDA(),
       latest_triangulated_frame_index,
       latest_mesh_surfel_count,
       vertex_buffer_resource_,
+      point_size_in_floats,
       visualize_last_update_timestamp,
       visualize_creation_timestamp,
       visualize_radii,
@@ -385,7 +389,7 @@ void CUDASurfelReconstruction::UpdateVisualizationBuffers(
     UpdateNeighborIndexBufferCUDA(
         stream,
         surfel_count_,
-        *surfels_,
+        surfels_->ToCUDA(),
         neighbor_index_buffer_resource_);
   }
   
@@ -393,7 +397,7 @@ void CUDASurfelReconstruction::UpdateVisualizationBuffers(
     UpdateNormalVertexBufferCUDA(
         stream,
         surfel_count_,
-        *surfels_,
+        surfels_->ToCUDA(),
         normal_vertex_buffer_resource_);
   }
 }
@@ -402,7 +406,7 @@ void CUDASurfelReconstruction::ExportVertices(
     cudaStream_t stream,
     CUDABuffer<float>* position_buffer,
     CUDABuffer<u8>* color_buffer) {
-  ExportVerticesCUDA(stream, surfel_count_, *surfels_, position_buffer, color_buffer);
+  ExportVerticesCUDA(stream, surfel_count_, surfels_->ToCUDA(), &position_buffer->ToCUDA(), &color_buffer->ToCUDA());
 }
 
 void CUDASurfelReconstruction::GetTimings(

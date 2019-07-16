@@ -81,8 +81,8 @@ class SurfelMeshing {
   // Iterates over surfels_to_remesh_ to perform a triangulation iteration.
   void Triangulate(bool force_debug = false);
   
-  // Converts the surfels to a point cloud. All colors are set to black.
-  void ConvertToPoint3fC3u8Cloud(Point3fC3u8Cloud* output);
+  // Converts the surfels to a point cloud.
+  void ConvertToPoint3fCloud(Point3fCloud* output);
   
   // Outputs the mesh as a Mesh3fCu8. Optionally, only outputs the indices.
   // TODO: indices_only has a hidden side effect wrt. including merged vertices in the indexing, document this (or better: split into two functions)

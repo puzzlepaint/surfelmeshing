@@ -32,16 +32,15 @@
 // Avoid warnings in Eigen includes with CUDA compiler
 #pragma diag_suppress code_is_unreachable
 
-#include "surfel_meshing/cuda_surfel_reconstruction.cuh"
+#include "surfel_meshing/cuda_surfel_reconstruction_kernels.cuh"
 
 #include <cub/block/block_reduce.cuh>
 #include <cub/device/device_scan.cuh>
-#include <libvis/point_cloud.h>
+#include <libvis/cuda/cuda_matrix.cuh>
+#include <libvis/cuda/cuda_util.h>
 #include <math_constants.h>
 
-#include "surfel_meshing/cuda_matrix.cuh"
 #include "surfel_meshing/cuda_util.cuh"
-#include "surfel_meshing/surfel.h"
 
 // Uncomment this to run CUDA kernels sequentially for debugging.
 // #define CUDA_SEQUENTIAL_CHECKS
@@ -69,6 +68,10 @@ constexpr bool kCheckScaleCompatibilityForNeighborAssignment = true;
 // loop closures.
 constexpr bool kProtectSlightlyOccludedSurfels = false;
 constexpr float kOcclusionDepthFactor = 0.01f;
+
+// This must be equal to kInvalidSurfelIndex, but we cannot include surfel.h
+// here since it includes Eigen headers.
+constexpr u32 kInvalidSurfelIndex = 4294967295;  // std::numeric_limits<u32>::max();
 
 
 __forceinline__ __device__ bool IsSurfelActiveForIntegration(
@@ -100,11 +103,31 @@ __global__ void CreateNewSurfelsCUDASerializingKernel(
                       x < depth_buffer.width() - kBorder &&
                       y < depth_buffer.height() - kBorder &&
                       depth_buffer(y, x) > 0 &&
-                      supporting_surfels(y, x) == Surfel::kInvalidIndex &&
-                      conflicting_surfels(y, x) == Surfel::kInvalidIndex;
+                      supporting_surfels(y, x) == kInvalidSurfelIndex &&
+                      conflicting_surfels(y, x) == kInvalidSurfelIndex;
     u32 seq_index = x + y * depth_buffer.width();
     new_surfel_flag_vector(0, seq_index) = new_surfel ? 1 : 0;
   }
+}
+
+void CallCreateNewSurfelsCUDASerializingKernel(
+    cudaStream_t stream,
+    const dim3& grid_dim,
+    const dim3& block_dim,
+    const CUDABuffer_<u16>& depth_buffer,
+    const CUDABuffer_<u32>& supporting_surfels,
+    const CUDABuffer_<u32>& conflicting_surfels,
+    const CUDABuffer_<u8>& new_surfel_flag_vector) {
+  CreateNewSurfelsCUDASerializingKernel
+  <<<grid_dim, block_dim, 0, stream>>>(
+      depth_buffer,
+      supporting_surfels,
+      conflicting_surfels,
+      new_surfel_flag_vector);
+  #ifdef CUDA_SEQUENTIAL_CHECKS
+    cudaDeviceSynchronize();
+  #endif
+  CHECK_CUDA_NO_ERROR();
 }
 
 __global__ void CreateNewSurfelsCUDACreationKernel(
@@ -171,14 +194,14 @@ __global__ void CreateNewSurfelsCUDACreationKernel(
     for (int direction = 0; direction < 4; ++ direction) {
       u32 neighbor_index = supporting_surfels(y + kDirectionsY[direction], x + kDirectionsX[direction]);
 
-      if (neighbor_index != Surfel::kInvalidIndex) {
+      if (neighbor_index != kInvalidSurfelIndex) {
         float3 this_to_neighbor = make_float3(surfels(kSurfelX, neighbor_index) - global_position.x,
                                               surfels(kSurfelY, neighbor_index) - global_position.y,
                                               surfels(kSurfelZ, neighbor_index) - global_position.z);
         float distance_squared =
             this_to_neighbor.x * this_to_neighbor.x + this_to_neighbor.y * this_to_neighbor.y + this_to_neighbor.z * this_to_neighbor.z;
         if (distance_squared > radius_factor_for_regularization_neighbors_squared * radius_squared) {
-          neighbor_index = Surfel::kInvalidIndex;
+          neighbor_index = kInvalidSurfelIndex;
         } else {
           neighbor_position_sum = make_float3(
               neighbor_position_sum.x + surfels(kSurfelSmoothX, neighbor_index),
@@ -207,115 +230,40 @@ __global__ void CreateNewSurfelsCUDACreationKernel(
   }
 }
 
-void CreateNewSurfelsCUDA(
+void CallCreateNewSurfelsCUDACreationKernel(
     cudaStream_t stream,
+    const dim3& grid_dim,
+    const dim3& block_dim,
     u32 frame_index,
-    const SE3f& global_T_local,
-    float depth_scaling,
-    float radius_factor_for_regularization_neighbors,
-    const PinholeCamera4f& depth_camera,
-    const CUDABuffer<u16>& depth_buffer,
-    const CUDABuffer<float2>& normals_buffer,
-    const CUDABuffer<float>& radius_buffer,
-    const CUDABuffer<Vec3u8>& color_buffer,
-    const CUDABuffer<u32>& supporting_surfels,
-    const CUDABuffer<u32>& conflicting_surfels,
-    void** new_surfels_temp_storage,
-    usize* new_surfels_temp_storage_bytes,
-    CUDABuffer<u8>* new_surfel_flag_vector,
-    CUDABuffer<u32>* new_surfel_indices,
+    float inv_depth_scaling,
+    float fx_inv, float fy_inv, float cx_inv, float cy_inv,
+    CUDAMatrix3x4 global_T_local,
+    CUDABuffer_<u16> depth_buffer,
+    CUDABuffer_<float2> normals_buffer,
+    CUDABuffer_<float> radius_buffer,
+    CUDABuffer_<uchar3> color_buffer,
+    CUDABuffer_<u32> supporting_surfels,
+    CUDABuffer_<u8> new_surfel_flag_vector,
+    CUDABuffer_<u32> new_surfel_indices,
     u32 surfel_count,
-    CUDABuffer<float>* surfels,
-    u32* new_surfel_count,
-    u8* new_surfel_count_2) {
-  #ifdef CUDA_SEQUENTIAL_CHECKS
-    cudaDeviceSynchronize();
-  #endif
-  CHECK_CUDA_NO_ERROR();
-  
-  const float fx = depth_camera.parameters()[0];
-  const float fy = depth_camera.parameters()[1];
-  const float cx = depth_camera.parameters()[2];
-  const float cy = depth_camera.parameters()[3];
-  
-  // Unprojection intrinsics for pixel center convention.
-  const float fx_inv = 1.0f / fx;
-  const float fy_inv = 1.0f / fy;
-  const float cx_pixel_center = cx - 0.5f;
-  const float cy_pixel_center = cy - 0.5f;
-  const float cx_inv_pixel_center = -cx_pixel_center / fx;
-  const float cy_inv_pixel_center = -cy_pixel_center / fy;
-  
-  // The first kernel marks in a sequential (non-pitched) vector whether a new surfel is created for the corresponding pixel or not.
-  constexpr int kBlockWidth = 32;
-  constexpr int kBlockHeight = 32;
-  dim3 grid_dim(GetBlockCount(depth_buffer.width(), kBlockWidth),
-                GetBlockCount(depth_buffer.height(), kBlockHeight));
-  dim3 block_dim(kBlockWidth, kBlockHeight);
-  
-  CreateNewSurfelsCUDASerializingKernel
-  <<<grid_dim, block_dim, 0, stream>>>(
-      depth_buffer.ToCUDA(),
-      supporting_surfels.ToCUDA(),
-      conflicting_surfels.ToCUDA(),
-      new_surfel_flag_vector->ToCUDA());
-  #ifdef CUDA_SEQUENTIAL_CHECKS
-    cudaDeviceSynchronize();
-  #endif
-  CHECK_CUDA_NO_ERROR();
-  
-  // Indices for the new surfels are computed with a parallel exclusive prefix sum from CUB.
-  if (*new_surfels_temp_storage_bytes == 0) {
-    cub::DeviceScan::ExclusiveSum(
-        *new_surfels_temp_storage,
-        *new_surfels_temp_storage_bytes,
-        new_surfel_flag_vector->ToCUDA().address(),
-        new_surfel_indices->ToCUDA().address(),
-        depth_buffer.width() * depth_buffer.height(),
-        stream);
-    
-    cudaMalloc(new_surfels_temp_storage, *new_surfels_temp_storage_bytes);
-  }
-  
-  cub::DeviceScan::ExclusiveSum(
-      *new_surfels_temp_storage,
-      *new_surfels_temp_storage_bytes,
-      new_surfel_flag_vector->ToCUDA().address(),
-      new_surfel_indices->ToCUDA().address(),
-      depth_buffer.width() * depth_buffer.height(),
-      stream);
-  
-  // Read back the number of new surfels to the CPU by reading the last element
-  // in new_surfel_indices and new_surfel_flag_vector.
-  // TODO: Do this concurrently with the next kernel call?
-  new_surfel_indices->DownloadPartAsync(
-      (depth_buffer.width() * depth_buffer.height() - 1) * sizeof(u32),
-      1 * sizeof(u32),
-      stream,
-      new_surfel_count);
-  new_surfel_flag_vector->DownloadPartAsync(
-      (depth_buffer.width() * depth_buffer.height() - 1) * sizeof(u8),
-      1 * sizeof(u8),
-      stream,
-      new_surfel_count_2);
-  
-  // Now that the indices are known, the actual surfel creation is done.
+    CUDABuffer_<float> surfels,
+    float radius_factor_for_regularization_neighbors_squared) {
   CreateNewSurfelsCUDACreationKernel
   <<<grid_dim, block_dim, 0, stream>>>(
       frame_index,
-      1.0f / depth_scaling,
-      fx_inv, fy_inv, cx_inv_pixel_center, cy_inv_pixel_center,
-      CUDAMatrix3x4(global_T_local.matrix3x4()),
-      depth_buffer.ToCUDA(),
-      normals_buffer.ToCUDA(),
-      radius_buffer.ToCUDA(),
-      *reinterpret_cast<const CUDABuffer_<uchar3>*>(&color_buffer.ToCUDA()),
-      supporting_surfels.ToCUDA(),
-      new_surfel_flag_vector->ToCUDA(),
-      new_surfel_indices->ToCUDA(),
+      inv_depth_scaling,
+      fx_inv, fy_inv, cx_inv, cy_inv,
+      global_T_local,
+      depth_buffer,
+      normals_buffer,
+      radius_buffer,
+      color_buffer,
+      supporting_surfels,
+      new_surfel_flag_vector,
+      new_surfel_indices,
       surfel_count,
-      surfels->ToCUDA(),
-      radius_factor_for_regularization_neighbors * radius_factor_for_regularization_neighbors);
+      surfels,
+      radius_factor_for_regularization_neighbors_squared);
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
   #endif
@@ -407,10 +355,11 @@ void UpdateSurfelVertexBufferCUDA(
     u32 frame_index,
     int surfel_integration_active_window_size,
     u32 surfel_count,
-    const CUDABuffer<float>& surfels,
+    const CUDABuffer_<float>& surfels,
     u32 latest_triangulated_frame_index,
     u32 latest_mesh_surfel_count,
     cudaGraphicsResource_t vertex_buffer_resource,
+    u32 point_size_in_floats,
     bool visualize_last_update_timestamp,
     bool visualize_creation_timestamp,
     bool visualize_radii,
@@ -443,9 +392,6 @@ void UpdateSurfelVertexBufferCUDA(
   dim3 grid_dim(GetBlockCount(surfel_count, kBlockWidth));
   dim3 block_dim(kBlockWidth);
   
-  CHECK(sizeof(Point3fC3u8) % sizeof(float) == 0);
-  u32 point_size_in_floats = sizeof(Point3fC3u8) / sizeof(float);
-  
   #define CALL_KERNEL(visualize_last_update_timestamp, \
                       visualize_creation_timestamp, \
                       visualize_radii, \
@@ -460,7 +406,7 @@ void UpdateSurfelVertexBufferCUDA(
           surfel_integration_active_window_size, \
           point_size_in_floats, \
           surfel_count, \
-          surfels.ToCUDA(), \
+          surfels, \
           latest_triangulated_frame_index, \
           latest_mesh_surfel_count, \
           vertex_buffer_ptr)
@@ -497,7 +443,7 @@ __global__ void UpdateNeighborIndexBufferCUDAKernel(
       neighbor_index_buffer_ptr[surfel_index * 2 * kSurfelNeighborCount + 2 * i + 0] = surfel_index;
       u32 neighbor_index = *reinterpret_cast<u32*>(&surfels(kSurfelNeighbor0 + i, surfel_index));
       neighbor_index_buffer_ptr[surfel_index * 2 * kSurfelNeighborCount + 2 * i + 1] =
-          (neighbor_index == Surfel::kInvalidIndex) ? surfel_index : neighbor_index;
+          (neighbor_index == kInvalidSurfelIndex) ? surfel_index : neighbor_index;
     }
   }
 }
@@ -505,7 +451,7 @@ __global__ void UpdateNeighborIndexBufferCUDAKernel(
 void UpdateNeighborIndexBufferCUDA(
     cudaStream_t stream,
     u32 surfel_count,
-    const CUDABuffer<float>& surfels,
+    const CUDABuffer_<float>& surfels,
     cudaGraphicsResource_t neighbor_index_buffer_resource) {
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
@@ -538,7 +484,7 @@ void UpdateNeighborIndexBufferCUDA(
   UpdateNeighborIndexBufferCUDAKernel
   <<<grid_dim, block_dim, 0, stream>>>(
       surfel_count,
-      surfels.ToCUDA(),
+      surfels,
       index_buffer_ptr);
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
@@ -570,7 +516,7 @@ __global__ void UpdateNormalVertexBufferCUDAKernel(
 void UpdateNormalVertexBufferCUDA(
     cudaStream_t stream,
     u32 surfel_count,
-    const CUDABuffer<float>& surfels,
+    const CUDABuffer_<float>& surfels,
     cudaGraphicsResource_t normal_vertex_buffer_resource) {
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
@@ -603,7 +549,7 @@ void UpdateNormalVertexBufferCUDA(
   UpdateNormalVertexBufferCUDAKernel
   <<<grid_dim, block_dim, 0, stream>>>(
       surfel_count,
-      surfels.ToCUDA(),
+      surfels,
       vertex_buffer_ptr);
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
@@ -630,7 +576,7 @@ __global__ void BlendMeasurementsCUDAStartKernel(
   constexpr int kBorder = 1;
   if (x >= kBorder && y >= kBorder && x < supporting_surfels.width() - kBorder && y < supporting_surfels.height() - kBorder) {
     // Only consider pixels with valid measurement depth and supporting surfels.
-    if (depth_buffer(y, x) == 0 || supporting_surfels(y, x) == Surfel::kInvalidIndex) {
+    if (depth_buffer(y, x) == 0 || supporting_surfels(y, x) == kInvalidSurfelIndex) {
       return;
     }
     
@@ -640,7 +586,7 @@ __global__ void BlendMeasurementsCUDAStartKernel(
       for (int wx = x - 1, wx_end = x + 1; wx <= wx_end; ++ wx) {
         if (depth_buffer(wy, wx) == 0) {
           measurement_border_pixel = true;
-        } else if (supporting_surfels(wy, wx) == Surfel::kInvalidIndex) {
+        } else if (supporting_surfels(wy, wx) == kInvalidSurfelIndex) {
           surfel_border_pixel = true;
         }
       }
@@ -668,14 +614,42 @@ __global__ void BlendMeasurementsCUDAStartKernel(
   }
 }
 
+void CallBlendMeasurementsCUDAStartKernel(
+    cudaStream_t stream,
+    const dim3& grid_dim,
+    const dim3& block_dim,
+    float depth_scaling,
+    CUDABuffer_<u16> depth_buffer,
+    CUDABuffer_<u32> supporting_surfels,
+    CUDABuffer_<u32> supporting_surfel_counts,
+    CUDABuffer_<float> supporting_surfel_depth_sums,
+    CUDABuffer_<u8> distance_map,
+    CUDABuffer_<float> surfel_depth_average_deltas,
+    CUDABuffer_<u8> new_distance_map,
+    CUDABuffer_<float> new_surfel_depth_average_deltas) {
+  BlendMeasurementsCUDAStartKernel
+  <<<grid_dim, block_dim, 0, stream>>>(
+      depth_scaling,
+      depth_buffer,
+      supporting_surfels,
+      supporting_surfel_counts,
+      supporting_surfel_depth_sums,
+      distance_map,
+      surfel_depth_average_deltas,
+      new_distance_map,
+      new_surfel_depth_average_deltas);
+  #ifdef CUDA_SEQUENTIAL_CHECKS
+    cudaDeviceSynchronize();
+  #endif
+  CHECK_CUDA_NO_ERROR();
+}
+
 __global__ void BlendMeasurementsCUDAIterationKernel(
     int iteration,
     float interpolation_factor_term,
     float depth_scaling,
     CUDABuffer_<u16> depth_buffer,
     CUDABuffer_<u32> supporting_surfels,
-    CUDABuffer_<u32> /*supporting_surfel_counts*/,
-    CUDABuffer_<float> /*supporting_surfel_depth_sums*/,
     CUDABuffer_<u8> distance_map,
     CUDABuffer_<float> surfel_depth_average_deltas,
     CUDABuffer_<u8> new_distance_map,
@@ -708,7 +682,7 @@ __global__ void BlendMeasurementsCUDAIterationKernel(
       }
     }
     
-    if (depth_buffer(y, x) != 0 && supporting_surfels(y, x) == Surfel::kInvalidIndex && new_distance_map(y, x) == 0) {
+    if (depth_buffer(y, x) != 0 && supporting_surfels(y, x) == kInvalidSurfelIndex && new_distance_map(y, x) == 0) {
       float delta_sum = 0;
       int count = 0;
       
@@ -733,70 +707,34 @@ __global__ void BlendMeasurementsCUDAIterationKernel(
   }
 }
 
-void BlendMeasurementsCUDA(
+void CallBlendMeasurementsCUDAIterationKernel(
     cudaStream_t stream,
-    int measurement_blending_radius,
-    float depth_correction_factor,
-    CUDABuffer<u16>* depth_buffer,
-    const CUDABuffer<u32>& supporting_surfels,
-    const CUDABuffer<u32>& supporting_surfel_counts,
-    const CUDABuffer<float>& supporting_surfel_depth_sums,
-    CUDABuffer<u8>* distance_map,
-    CUDABuffer<float>* surfel_depth_average_deltas,
-    CUDABuffer<u8>* new_distance_map,
-    CUDABuffer<float>* new_surfel_depth_average_deltas) {
-  #ifdef CUDA_SEQUENTIAL_CHECKS
-    cudaDeviceSynchronize();
-  #endif
-  CHECK_CUDA_NO_ERROR();
-  
-  distance_map->Clear(0, stream);
-  new_distance_map->Clear(0, stream);
-  
-  constexpr int kBlockWidth = 32;
-  constexpr int kBlockHeight = 32;
-  dim3 grid_dim(GetBlockCount(supporting_surfels.width(), kBlockWidth),
-                GetBlockCount(supporting_surfels.height(), kBlockHeight));
-  dim3 block_dim(kBlockWidth, kBlockHeight);
-  
-  // Find pixels with distance == 1, having a depth measurement next to the measurement border, and supporting surfels.
-  BlendMeasurementsCUDAStartKernel
+    const dim3& grid_dim,
+    const dim3& block_dim,
+    int iteration,
+    float interpolation_factor_term,
+    float depth_scaling,
+    CUDABuffer_<u16> depth_buffer,
+    CUDABuffer_<u32> supporting_surfels,
+    CUDABuffer_<u8> distance_map,
+    CUDABuffer_<float> surfel_depth_average_deltas,
+    CUDABuffer_<u8> new_distance_map,
+    CUDABuffer_<float> new_surfel_depth_average_deltas) {
+  BlendMeasurementsCUDAIterationKernel
   <<<grid_dim, block_dim, 0, stream>>>(
-      1.0f / depth_correction_factor,
-      depth_buffer->ToCUDA(),
-      supporting_surfels.ToCUDA(),
-      supporting_surfel_counts.ToCUDA(),
-      supporting_surfel_depth_sums.ToCUDA(),
-      distance_map->ToCUDA(),
-      surfel_depth_average_deltas->ToCUDA(),
-      new_distance_map->ToCUDA(),
-      new_surfel_depth_average_deltas->ToCUDA());
+      iteration,
+      interpolation_factor_term,
+      depth_scaling,
+      depth_buffer,
+      supporting_surfels,
+      distance_map,
+      surfel_depth_average_deltas,
+      new_distance_map,
+      new_surfel_depth_average_deltas);
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
   #endif
   CHECK_CUDA_NO_ERROR();
-  
-  // Find pixels with distances in [2, measurement_blending_radius] and average surfel depths.
-  for (int iteration = 2; iteration < measurement_blending_radius; ++ iteration) {
-    BlendMeasurementsCUDAIterationKernel
-    <<<grid_dim, block_dim, 0, stream>>>(
-        iteration,
-        1.0f / (measurement_blending_radius - 1.0f),
-        1.0f / depth_correction_factor,
-        depth_buffer->ToCUDA(),
-        supporting_surfels.ToCUDA(),
-        supporting_surfel_counts.ToCUDA(),
-        supporting_surfel_depth_sums.ToCUDA(),
-        distance_map->ToCUDA(),
-        surfel_depth_average_deltas->ToCUDA(),
-        new_distance_map->ToCUDA(),
-        new_surfel_depth_average_deltas->ToCUDA());
-    #ifdef CUDA_SEQUENTIAL_CHECKS
-      cudaDeviceSynchronize();
-    #endif
-    CHECK_CUDA_NO_ERROR();
-  }
-  
 }
 
 
@@ -909,7 +847,7 @@ __device__ void IntegrateOrConflictSurfel(
         #pragma unroll
         for (int i = 0; i < kSurfelNeighborCount; ++ i) {
           // TODO: (Sh/c)ould the neighbors be initialized to something here instead of being removed completely?
-          *reinterpret_cast<u32*>(&surfels(kSurfelNeighbor0 + i, surfel_index)) = Surfel::kInvalidIndex;
+          *reinterpret_cast<u32*>(&surfels(kSurfelNeighbor0 + i, surfel_index)) = kInvalidSurfelIndex;
         }
         
         surfels(kSurfelConfidence, surfel_index) = 1;
@@ -1203,74 +1141,52 @@ __global__ void IntegrateMeasurementsCUDAKernel(
   // TODO: use half integration weight if the surfel is associated to two pixels?
 }
 
-void IntegrateMeasurementsCUDA(
+void CallIntegrateMeasurementsCUDAKernel(
     cudaStream_t stream,
+    const dim3& grid_dim,
+    const dim3& block_dim,
     u32 frame_index,
     int surfel_integration_active_window_size,
     float max_surfel_confidence,
     float sensor_noise_factor,
-    float normal_compatibility_threshold_deg,
-    const SE3f& global_T_local,
-    float depth_scaling,
-    const PinholeCamera4f& depth_camera,
-    const CUDABuffer<u16>& depth_buffer,
-    const CUDABuffer<float2>& normals_buffer,
-    const CUDABuffer<float>& radius_buffer,
-    const CUDABuffer<Vec3u8>& color_buffer,
-    const CUDABuffer<u32>& supporting_surfels,
-    const CUDABuffer<u32>& supporting_surfel_counts,
-    const CUDABuffer<u32>& conflicting_surfels,
-    const CUDABuffer<float>& first_surfel_depth,
+    float cos_normal_compatibility_threshold,
+    float inv_depth_scaling,
+    float fx, float fy, float cx, float cy,
+    float fx_inv, float fy_inv, float cx_inv, float cy_inv,
+    CUDAMatrix3x4 local_T_global,
+    CUDAMatrix3x4 global_T_local,
+    CUDABuffer_<u16> depth_buffer,
+    CUDABuffer_<float2> normals_buffer,
+    CUDABuffer_<float> radius_buffer,
+    CUDABuffer_<uchar3> color_buffer,
+    CUDABuffer_<u32> supporting_surfels,
+    CUDABuffer_<u32> supporting_surfel_counts,
+    CUDABuffer_<u32> conflicting_surfels,
+    CUDABuffer_<float> first_surfel_depth,
     u32 surfel_count,
-    CUDABuffer<float>* surfels) {
-  #ifdef CUDA_SEQUENTIAL_CHECKS
-    cudaDeviceSynchronize();
-  #endif
-  CHECK_CUDA_NO_ERROR();
-  
-  if (surfel_count == 0) {
-    return;
-  }
-  
-  const float fx = depth_camera.parameters()[0];
-  const float fy = depth_camera.parameters()[1];
-  const float cx = depth_camera.parameters()[2];
-  const float cy = depth_camera.parameters()[3];
-  
-  // Unprojection intrinsics for pixel center convention.
-  const float fx_inv = 1.0f / fx;
-  const float fy_inv = 1.0f / fy;
-  const float cx_pixel_center = cx - 0.5f;
-  const float cy_pixel_center = cy - 0.5f;
-  const float cx_inv_pixel_center = -cx_pixel_center / fx;
-  const float cy_inv_pixel_center = -cy_pixel_center / fy;
-  
-  constexpr int kBlockWidth = 1024;
-  dim3 grid_dim(GetBlockCount(surfel_count, kBlockWidth));
-  dim3 block_dim(kBlockWidth);
-  
+    CUDABuffer_<float> surfels) {
   IntegrateMeasurementsCUDAKernel
   <<<grid_dim, block_dim, 0, stream>>>(
       frame_index,
       surfel_integration_active_window_size,
       max_surfel_confidence,
       sensor_noise_factor,
-      cosf(M_PI / 180.0f * normal_compatibility_threshold_deg),
-      1.0f / depth_scaling,
+      cos_normal_compatibility_threshold,
+      inv_depth_scaling,
       fx, fy, cx, cy,
-      fx_inv, fy_inv, cx_inv_pixel_center, cy_inv_pixel_center,
-      CUDAMatrix3x4(global_T_local.inverse().matrix3x4()),
-      CUDAMatrix3x4(global_T_local.matrix3x4()),
-      depth_buffer.ToCUDA(),
-      normals_buffer.ToCUDA(),
-      radius_buffer.ToCUDA(),
-      *reinterpret_cast<const CUDABuffer_<uchar3>*>(&color_buffer.ToCUDA()),
-      supporting_surfels.ToCUDA(),
-      supporting_surfel_counts.ToCUDA(),
-      conflicting_surfels.ToCUDA(),
-      first_surfel_depth.ToCUDA(),
+      fx_inv, fy_inv, cx_inv, cy_inv,
+      local_T_global,
+      global_T_local,
+      depth_buffer,
+      normals_buffer,
+      radius_buffer,
+      color_buffer,
+      supporting_surfels,
+      supporting_surfel_counts,
+      conflicting_surfels,
+      first_surfel_depth,
       surfel_count,
-      surfels->ToCUDA());
+      surfels);
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
   #endif
@@ -1283,13 +1199,11 @@ __global__ void UpdateNeighborsCUDAKernel(
     int surfel_integration_active_window_size,
     float radius_factor_for_regularization_neighbors_squared,
     CUDABuffer_<u32> supporting_surfels,
-    CUDABuffer_<u32> /*conflicting_surfels*/,
     float fx, float fy, float cx, float cy,
     CUDAMatrix3x4 local_T_global,
     float sensor_noise_factor,
     float depth_correction_factor,
     CUDABuffer_<u16> depth_buffer,
-    CUDABuffer_<float2> /*normals_buffer*/,
     CUDABuffer_<float> radius_buffer,
     CUDABuffer_<float> first_surfel_depth,
     u32 surfel_count,
@@ -1391,7 +1305,7 @@ __global__ void UpdateNeighborsCUDAKernel(
     u32 neighbor_surfel_indices[kSurfelNeighborCount];
     for (int n = 0; n < kSurfelNeighborCount; ++ n) {
       neighbor_surfel_indices[n] = *reinterpret_cast<u32*>(&surfels(kSurfelNeighbor0 + n, surfel_index));
-      if (neighbor_surfel_indices[n] == Surfel::kInvalidIndex) {
+      if (neighbor_surfel_indices[n] == kInvalidSurfelIndex) {
         neighbor_distances_squared[n] = CUDART_INF_F;
       } else {
         float3 neighbor_position =
@@ -1410,7 +1324,7 @@ __global__ void UpdateNeighborsCUDAKernel(
     constexpr int kDirectionsY[4] = {0, 0, -1, 1};
     for (int direction = 0; direction < 4; ++ direction) {
       u32 neighbor_index = supporting_surfels(y + kDirectionsY[direction], x + kDirectionsX[direction]);
-      if (neighbor_index != Surfel::kInvalidIndex &&
+      if (neighbor_index != kInvalidSurfelIndex &&
           neighbor_index != surfel_index) {
         // Check for closeness.
         float3 this_to_neighbor = make_float3(surfels(kSurfelX, neighbor_index) - global_position.x,
@@ -1419,10 +1333,10 @@ __global__ void UpdateNeighborsCUDAKernel(
         float distance_squared =
             this_to_neighbor.x * this_to_neighbor.x + this_to_neighbor.y * this_to_neighbor.y + this_to_neighbor.z * this_to_neighbor.z;
         if (distance_squared > radius_factor_for_regularization_neighbors_squared * radius_squared) {
-          neighbor_index = Surfel::kInvalidIndex;
+          neighbor_index = kInvalidSurfelIndex;
         }
         
-        if (neighbor_index != Surfel::kInvalidIndex) {
+        if (neighbor_index != kInvalidSurfelIndex) {
           // Check for compatible normal.
           float3 neighbor_normal =
               make_float3(surfels(kSurfelNormalX, neighbor_index),
@@ -1432,10 +1346,10 @@ __global__ void UpdateNeighborsCUDAKernel(
                              global_normal.y * neighbor_normal.y +
                              global_normal.z * neighbor_normal.z;
           if (normal_dot <= 0) {
-            neighbor_index = Surfel::kInvalidIndex;
+            neighbor_index = kInvalidSurfelIndex;
           }
           
-          if (neighbor_index != Surfel::kInvalidIndex) {
+          if (neighbor_index != kInvalidSurfelIndex) {
             // Check whether it is already a neighbor, or find the best insertion slot.
             int best_n = -1;
             float best_distance_squared = -1;
@@ -1465,6 +1379,44 @@ __global__ void UpdateNeighborsCUDAKernel(
   }
 }
 
+void CallUpdateNeighborsCUDAKernel(
+    cudaStream_t stream,
+    const dim3& grid_dim,
+    const dim3& block_dim,
+    u32 frame_index,
+    int surfel_integration_active_window_size,
+    float radius_factor_for_regularization_neighbors_squared,
+    CUDABuffer_<u32> supporting_surfels,
+    float fx, float fy, float cx, float cy,
+    CUDAMatrix3x4 local_T_global,
+    float sensor_noise_factor,
+    float depth_correction_factor,
+    CUDABuffer_<u16> depth_buffer,
+    CUDABuffer_<float> radius_buffer,
+    CUDABuffer_<float> first_surfel_depth,
+    u32 surfel_count,
+    CUDABuffer_<float> surfels) {
+  UpdateNeighborsCUDAKernel
+  <<<grid_dim, block_dim, 0, stream>>>(
+      frame_index,
+      surfel_integration_active_window_size,
+      radius_factor_for_regularization_neighbors_squared,
+      supporting_surfels,
+      fx, fy, cx, cy,
+      local_T_global,
+      sensor_noise_factor,
+      depth_correction_factor,
+      depth_buffer,
+      radius_buffer,
+      first_surfel_depth,
+      surfel_count,
+      surfels);
+  #ifdef CUDA_SEQUENTIAL_CHECKS
+    cudaDeviceSynchronize();
+  #endif
+  CHECK_CUDA_NO_ERROR();
+}
+
 __global__ void UpdateNeighborsCUDARemoveReplacedNeighborsKernel(
     u32 frame_index,
     u32 surfel_count,
@@ -1474,79 +1426,28 @@ __global__ void UpdateNeighborsCUDARemoveReplacedNeighborsKernel(
   if (surfel_index < surfel_count) {
     for (int neighbor_index = 0; neighbor_index < kSurfelNeighborCount; ++ neighbor_index) {
       u32 neighbor_surfel_index = *reinterpret_cast<u32*>(&surfels(kSurfelNeighbor0 + neighbor_index, surfel_index));
-      if (neighbor_surfel_index != Surfel::kInvalidIndex) {
+      if (neighbor_surfel_index != kInvalidSurfelIndex) {
         if (*reinterpret_cast<u8*>(&reinterpret_cast<uchar4*>(&surfels(kSurfelColor, neighbor_surfel_index))->w) == 1) {
           // This neighbor has the neighbor detach request flag set. Remove it.
-          *reinterpret_cast<u32*>(&surfels(kSurfelNeighbor0 + neighbor_index, surfel_index)) = Surfel::kInvalidIndex;
+          *reinterpret_cast<u32*>(&surfels(kSurfelNeighbor0 + neighbor_index, surfel_index)) = kInvalidSurfelIndex;
         }
       }
     }
   }
 }
 
-void UpdateNeighborsCUDA(
+void CallUpdateNeighborsCUDARemoveReplacedNeighborsKernel(
     cudaStream_t stream,
+    const dim3& grid_dim,
+    const dim3& block_dim,
     u32 frame_index,
-    int surfel_integration_active_window_size,
-    float radius_factor_for_regularization_neighbors,
-    const CUDABuffer<u32>& supporting_surfels,
-    const CUDABuffer<u32>& conflicting_surfels,
-    const PinholeCamera4f& depth_camera,
-    const SE3f& local_T_global,
-    float sensor_noise_factor,
-    float depth_correction_factor,
-    const CUDABuffer<u16>& depth_buffer,
-    const CUDABuffer<float2>& normals_buffer,
-    const CUDABuffer<float>& radius_buffer,
-    const CUDABuffer<float>& first_surfel_depth,
-    usize surfel_count,
-    CUDABuffer<float>* surfels) {
-  #ifdef CUDA_SEQUENTIAL_CHECKS
-    cudaDeviceSynchronize();
-  #endif
-  CHECK_CUDA_NO_ERROR();
-  
-  if (surfel_count == 0) {
-    return;
-  }
-  
-  const float fx = depth_camera.parameters()[0];
-  const float fy = depth_camera.parameters()[1];
-  const float cx = depth_camera.parameters()[2];
-  const float cy = depth_camera.parameters()[3];
-  
-  constexpr int kSurfelsBlockWidth = 1024;
-  dim3 grid_dim(GetBlockCount(surfel_count, kSurfelsBlockWidth));
-  dim3 block_dim(kSurfelsBlockWidth);
-  
-  UpdateNeighborsCUDAKernel
-  <<<grid_dim, block_dim, 0, stream>>>(
-      frame_index,
-      surfel_integration_active_window_size,
-      radius_factor_for_regularization_neighbors * radius_factor_for_regularization_neighbors,
-      supporting_surfels.ToCUDA(),
-      conflicting_surfels.ToCUDA(),
-      fx, fy, cx, cy,
-      CUDAMatrix3x4(local_T_global.matrix3x4()),
-      sensor_noise_factor,
-      depth_correction_factor,
-      depth_buffer.ToCUDA(),
-      normals_buffer.ToCUDA(),
-      radius_buffer.ToCUDA(),
-      first_surfel_depth.ToCUDA(),
-      surfel_count,
-      surfels->ToCUDA());
-  #ifdef CUDA_SEQUENTIAL_CHECKS
-    cudaDeviceSynchronize();
-  #endif
-  CHECK_CUDA_NO_ERROR();
-  
-  
+    u32 surfel_count,
+    CUDABuffer_<float> surfels) {
   UpdateNeighborsCUDARemoveReplacedNeighborsKernel
   <<<grid_dim, block_dim, 0, stream>>>(
       frame_index,
       surfel_count,
-      surfels->ToCUDA());
+      surfels);
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
   #endif
@@ -1655,42 +1556,26 @@ __global__ void RenderMinDepthCUDAKernel(
   }
 }
 
-void RenderMinDepthCUDA(
+void CallRenderMinDepthCUDAKernel(
     cudaStream_t stream,
+    const dim3& grid_dim,
+    const dim3& block_dim,
     u32 frame_index,
     int surfel_integration_active_window_size,
-    const SE3f& local_T_global,
-    const PinholeCamera4f& depth_camera,
-    CUDABuffer<float>* first_surfel_depth,
+    float fx, float fy, float cx, float cy,
+    CUDAMatrix3x4 local_T_global,
     u32 surfel_count,
-    const CUDABuffer<float>& surfels) {
-  #ifdef CUDA_SEQUENTIAL_CHECKS
-    cudaDeviceSynchronize();
-  #endif
-  CHECK_CUDA_NO_ERROR();
-  
-  if (surfel_count == 0) {
-    return;
-  }
-  
-  const float fx = depth_camera.parameters()[0];
-  const float fy = depth_camera.parameters()[1];
-  const float cx = depth_camera.parameters()[2];
-  const float cy = depth_camera.parameters()[3];
-  
-  constexpr int kBlockWidth = 1024;
-  dim3 grid_dim(GetBlockCount(surfel_count, kBlockWidth));
-  dim3 block_dim(kBlockWidth);
-  
+    CUDABuffer_<float> surfels,
+    CUDABuffer_<float> first_surfel_depth) {
   RenderMinDepthCUDAKernel
   <<<grid_dim, block_dim, 0, stream>>>(
       frame_index,
       surfel_integration_active_window_size,
       fx, fy, cx, cy,
-      CUDAMatrix3x4(local_T_global.matrix3x4()),
+      local_T_global,
       surfel_count,
-      surfels.ToCUDA(),
-      first_surfel_depth->ToCUDA());
+      surfels,
+      first_surfel_depth);
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
   #endif
@@ -1775,9 +1660,9 @@ __device__ void ConsiderSurfelAssociationToPixel(
                       local_surfel_normal.z * local_normal.z;
     if (dot_angle < cos_normal_compatibility_threshold) {
       // HACK: Avoid creation of a new surfel here in case there is no other conflicting or supporting surfel
-      //       by setting conflicting_surfels(y, x) to an invalid index unequal to Surfel::kInvalidIndex.
+      //       by setting conflicting_surfels(y, x) to an invalid index unequal to kInvalidSurfelIndex.
       // TODO: This can be harmful since it can prevent the creation of valid surfaces. Delete it?
-//       atomicCAS(&conflicting_surfels(y, x), Surfel::kInvalidIndex, Surfel::kInvalidIndex - 1);
+//       atomicCAS(&conflicting_surfels(y, x), kInvalidSurfelIndex, kInvalidSurfelIndex - 1);
       return;
     }
   }
@@ -1793,14 +1678,14 @@ __device__ void ConsiderSurfelAssociationToPixel(
     const float observation_radius_squared = radius_buffer(y, x);
     if (observation_radius_squared / surfel_radius_squared > kMaxObservationRadiusFactorForIntegration * kMaxObservationRadiusFactorForIntegration) {
       // HACK: Avoid creation of a new surfel here in case there is no other conflicting or supporting surfel
-      //       by setting conflicting_surfels(y, x) to an invalid index unequal to Surfel::kInvalidIndex.
-      atomicCAS(&conflicting_surfels(y, x), Surfel::kInvalidIndex, Surfel::kInvalidIndex - 1);
+      //       by setting conflicting_surfels(y, x) to an invalid index unequal to kInvalidSurfelIndex.
+      atomicCAS(&conflicting_surfels(y, x), kInvalidSurfelIndex, kInvalidSurfelIndex - 1);
       return;
     }
   }
   
   // Replace the supporting surfel entry only if it was previously empty
-  atomicCAS(&supporting_surfels(y, x), Surfel::kInvalidIndex, surfel_index);
+  atomicCAS(&supporting_surfels(y, x), kInvalidSurfelIndex, surfel_index);
   
   // Add to supporting surfel count for the pixel
   atomicAdd(&supporting_surfel_counts(y, x), 1);
@@ -1922,70 +1807,52 @@ __global__ void AssociateSurfelsCUDAKernel(
   }
 }
 
-void AssociateSurfelsCUDA(
+void CallAssociateSurfelsCUDAKernel(
     cudaStream_t stream,
+    const dim3& grid_dim,
+    const dim3& block_dim,
     u32 frame_index,
     int surfel_integration_active_window_size,
+    float fx, float fy, float cx, float cy,
+    CUDAMatrix3x4 local_T_global,
     float sensor_noise_factor,
-    float normal_compatibility_threshold_deg,
-    const SE3f& local_T_global,
-    const PinholeCamera4f& depth_camera,
-    float depth_correction_factor,
-    const CUDABuffer<u16>& depth_buffer,
-    const CUDABuffer<float2>& normals_buffer,
-    const CUDABuffer<float>& radius_buffer,
-    CUDABuffer<u32>* supporting_surfels,
-    CUDABuffer<u32>* supporting_surfel_counts,
-    CUDABuffer<float>* supporting_surfel_depth_sums,
-    CUDABuffer<u32>* conflicting_surfels,
-    CUDABuffer<float>* first_surfel_depth,
+    float cos_normal_compatibility_threshold,
     u32 surfel_count,
-    const CUDABuffer<float>& surfels) {
-  #ifdef CUDA_SEQUENTIAL_CHECKS
-    cudaDeviceSynchronize();
-  #endif
-  CHECK_CUDA_NO_ERROR();
-  
-  if (surfel_count == 0) {
-    return;
-  }
-  
-  const float fx = depth_camera.parameters()[0];
-  const float fy = depth_camera.parameters()[1];
-  const float cx = depth_camera.parameters()[2];
-  const float cy = depth_camera.parameters()[3];
-  
-  constexpr int kBlockWidth = 1024;
-  dim3 grid_dim(GetBlockCount(surfel_count, kBlockWidth));
-  dim3 block_dim(kBlockWidth);
-  
+    CUDABuffer_<float> surfels,
+    float depth_correction_factor,
+    CUDABuffer_<u16> depth_buffer,
+    CUDABuffer_<float2> normals_buffer,
+    CUDABuffer_<float> radius_buffer,
+    CUDABuffer_<u32> supporting_surfels,
+    CUDABuffer_<u32> supporting_surfel_counts,
+    CUDABuffer_<float> supporting_surfel_depth_sums,
+    CUDABuffer_<u32> conflicting_surfels,
+    CUDABuffer_<float> first_surfel_depth) {
   AssociateSurfelsCUDAKernel
   <<<grid_dim, block_dim, 0, stream>>>(
       frame_index,
       surfel_integration_active_window_size,
       fx, fy, cx, cy,
-      CUDAMatrix3x4(local_T_global.matrix3x4()),
+      local_T_global,
       sensor_noise_factor,
-      cosf(M_PI / 180.0f * normal_compatibility_threshold_deg),
+      cos_normal_compatibility_threshold,
       surfel_count,
-      surfels.ToCUDA(),
+      surfels,
       depth_correction_factor,
-      depth_buffer.ToCUDA(),
-      normals_buffer.ToCUDA(),
-      radius_buffer.ToCUDA(),
-      supporting_surfels->ToCUDA(),
-      supporting_surfel_counts->ToCUDA(),
-      supporting_surfel_depth_sums->ToCUDA(),
-      conflicting_surfels->ToCUDA(),
-      first_surfel_depth->ToCUDA());
+      depth_buffer,
+      normals_buffer,
+      radius_buffer,
+      supporting_surfels,
+      supporting_surfel_counts,
+      supporting_surfel_depth_sums,
+      conflicting_surfels,
+      first_surfel_depth);
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
   #endif
   CHECK_CUDA_NO_ERROR();
 }
 
-
-constexpr int kMergeBlockWidth = 1024;
 
 __device__ bool ConsiderSurfelMergeAtPixel(
     int x, int y,
@@ -2081,7 +1948,7 @@ __device__ bool ConsiderSurfelMergeAtPixel(
   
   // Never merge the supported surfel.
   u32 supported_surfel = supporting_surfels(y, x);
-  if (supported_surfel == surfel_index || supported_surfel == Surfel::kInvalidIndex) {
+  if (supported_surfel == surfel_index || supported_surfel == kInvalidSurfelIndex) {
     return false;
   }
   
@@ -2125,8 +1992,6 @@ __device__ bool ConsiderSurfelMergeAtPixel(
 }
 
 __global__ void MergeSurfelsCUDAKernel(
-    u32 /*frame_index*/,
-    int /*surfel_integration_active_window_size*/,
     float fx, float fy, float cx, float cy,
     CUDAMatrix3x4 local_T_global,
     float sensor_noise_factor,
@@ -2186,75 +2051,48 @@ __global__ void MergeSurfelsCUDAKernel(
   }
 }
 
-void MergeSurfelsCUDA(
+void CallMergeSurfelsCUDAKernel(
     cudaStream_t stream,
-    u32 frame_index,
-    int surfel_integration_active_window_size,
+    const dim3& grid_dim,
+    const dim3& block_dim,
+    float fx, float fy, float cx, float cy,
+    CUDAMatrix3x4 local_T_global,
     float sensor_noise_factor,
-    float normal_compatibility_threshold_deg,
-    const SE3f& local_T_global,
-    const PinholeCamera4f& depth_camera,
-    float depth_correction_factor,
-    const CUDABuffer<u16>& depth_buffer,
-    const CUDABuffer<float2>& normals_buffer,
-    const CUDABuffer<float>& radius_buffer,
-    CUDABuffer<u32>* supporting_surfels,
-    CUDABuffer<u32>* supporting_surfel_counts,
-    CUDABuffer<float>* supporting_surfel_depth_sums,
-    CUDABuffer<u32>* conflicting_surfels,
-    CUDABuffer<float>* first_surfel_depth,
+    float cos_normal_compatibility_threshold,
     u32 surfel_count,
-    u32* merge_count,
-    CUDABuffer<float>* surfels) {
-  #ifdef CUDA_SEQUENTIAL_CHECKS
-    cudaDeviceSynchronize();
-  #endif
-  CHECK_CUDA_NO_ERROR();
-  
-  if (surfel_count == 0) {
-    return;
-  }
-  
-  const float fx = depth_camera.parameters()[0];
-  const float fy = depth_camera.parameters()[1];
-  const float cx = depth_camera.parameters()[2];
-  const float cy = depth_camera.parameters()[3];
-  
-  dim3 grid_dim(GetBlockCount(surfel_count, kMergeBlockWidth));
-  dim3 block_dim(kMergeBlockWidth);
-  
-  static CUDABuffer<u32> num_merges_buffer(1, 1);  // TODO: do not use static
-  num_merges_buffer.Clear(0, stream);
-  
+    CUDABuffer_<float> surfels,
+    float depth_correction_factor,
+    CUDABuffer_<u16> depth_buffer,
+    CUDABuffer_<float2> normals_buffer,
+    CUDABuffer_<float> radius_buffer,
+    CUDABuffer_<u32> supporting_surfels,
+    CUDABuffer_<u32> supporting_surfel_counts,
+    CUDABuffer_<float> supporting_surfel_depth_sums,
+    CUDABuffer_<u32> conflicting_surfels,
+    CUDABuffer_<float> first_surfel_depth,
+    CUDABuffer_<u32> num_merges_buffer) {
   MergeSurfelsCUDAKernel
   <<<grid_dim, block_dim, 0, stream>>>(
-      frame_index,
-      surfel_integration_active_window_size,
       fx, fy, cx, cy,
-      CUDAMatrix3x4(local_T_global.matrix3x4()),
+      local_T_global,
       sensor_noise_factor,
-      cosf(M_PI / 180.0f * normal_compatibility_threshold_deg),
+      cos_normal_compatibility_threshold,
       surfel_count,
-      surfels->ToCUDA(),
+      surfels,
       depth_correction_factor,
-      depth_buffer.ToCUDA(),
-      normals_buffer.ToCUDA(),
-      radius_buffer.ToCUDA(),
-      supporting_surfels->ToCUDA(),
-      supporting_surfel_counts->ToCUDA(),
-      supporting_surfel_depth_sums->ToCUDA(),
-      conflicting_surfels->ToCUDA(),
-      first_surfel_depth->ToCUDA(),
-      num_merges_buffer.ToCUDA());
+      depth_buffer,
+      normals_buffer,
+      radius_buffer,
+      supporting_surfels,
+      supporting_surfel_counts,
+      supporting_surfel_depth_sums,
+      conflicting_surfels,
+      first_surfel_depth,
+      num_merges_buffer);
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
   #endif
   CHECK_CUDA_NO_ERROR();
-  
-  u32 num_merges = 0;
-  num_merges_buffer.DownloadAsync(stream, &num_merges);
-  cudaStreamSynchronize(stream);
-  *merge_count += num_merges;
 }
 
 
@@ -2288,7 +2126,7 @@ __global__ void RegularizeSurfelsCUDAAccumulateNeighborGradientsKernel(
     int neighbor_count = 0;
     for (int neighbor_index = 0; neighbor_index < kSurfelNeighborCount; ++ neighbor_index) {
       u32 neighbor_surfel_index = *reinterpret_cast<u32*>(&surfels(kSurfelNeighbor0 + neighbor_index, surfel_index));
-      if (neighbor_surfel_index == Surfel::kInvalidIndex) {
+      if (neighbor_surfel_index == kInvalidSurfelIndex) {
         continue;
       }
       if (static_cast<int>(*reinterpret_cast<u32*>(&surfels(kSurfelLastUpdateStamp, neighbor_surfel_index))) < static_cast<int>(frame_index - regularization_frame_window_size)) {
@@ -2315,7 +2153,7 @@ __global__ void RegularizeSurfelsCUDAAccumulateNeighborGradientsKernel(
     float factor = 2 * regularizer_weight / neighbor_count;
     for (int neighbor_index = 0; neighbor_index < kSurfelNeighborCount; ++ neighbor_index) {
       u32 neighbor_surfel_index = *reinterpret_cast<u32*>(&surfels(kSurfelNeighbor0 + neighbor_index, surfel_index));
-      if (neighbor_surfel_index == Surfel::kInvalidIndex) {
+      if (neighbor_surfel_index == kInvalidSurfelIndex) {
         continue;
       }
       if (static_cast<int>(*reinterpret_cast<u32*>(&surfels(kSurfelLastUpdateStamp, neighbor_surfel_index))) < static_cast<int>(frame_index - regularization_frame_window_size)) {
@@ -2350,7 +2188,7 @@ __global__ void RegularizeSurfelsCUDAAccumulateNeighborGradientsKernel(
       //              However, I think this should be relatively rare.
       float neighbor_distance_squared = this_to_neighbor.x * this_to_neighbor.x + this_to_neighbor.y * this_to_neighbor.y + this_to_neighbor.z * this_to_neighbor.z;
       if (neighbor_distance_squared > radius_factor_for_regularization_neighbors_squared * surfel_radius_squared) {
-        *reinterpret_cast<u32*>(&surfels(kSurfelNeighbor0 + neighbor_index, surfel_index)) = Surfel::kInvalidIndex;
+        *reinterpret_cast<u32*>(&surfels(kSurfelNeighbor0 + neighbor_index, surfel_index)) = kInvalidSurfelIndex;
       }
     }
   }
@@ -2394,7 +2232,7 @@ __global__ void RegularizeSurfelsCUDAKernel(
     float3 regularization_gradient = make_float3(0, 0, 0);
     for (int neighbor_index = 0; neighbor_index < kSurfelNeighborCount; ++ neighbor_index) {
       u32 neighbor_surfel_index = *reinterpret_cast<u32*>(&surfels(kSurfelNeighbor0 + neighbor_index, surfel_index));
-      if (neighbor_surfel_index == Surfel::kInvalidIndex) {
+      if (neighbor_surfel_index == kInvalidSurfelIndex) {
         continue;
       }
       
@@ -2496,7 +2334,7 @@ void RegularizeSurfelsCUDA(
     float regularizer_weight,
     int regularization_frame_window_size,
     u32 surfel_count,
-    CUDABuffer<float>* surfels) {
+    CUDABuffer_<float>* surfels) {
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
   #endif
@@ -2517,7 +2355,7 @@ void RegularizeSurfelsCUDA(
         frame_index,
         regularization_frame_window_size,
         surfel_count,
-        surfels->ToCUDA());
+        *surfels);
     #ifdef CUDA_SEQUENTIAL_CHECKS
       cudaDeviceSynchronize();
     #endif
@@ -2528,7 +2366,7 @@ void RegularizeSurfelsCUDA(
   RegularizeSurfelsCUDAClearGradientsKernel
   <<<grid_dim, block_dim, 0, stream>>>(
       surfel_count,
-      surfels->ToCUDA());
+      *surfels);
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
   #endif
@@ -2541,7 +2379,7 @@ void RegularizeSurfelsCUDA(
       radius_factor_for_regularization_neighbors * radius_factor_for_regularization_neighbors,
       regularizer_weight,
       surfel_count,
-      surfels->ToCUDA());
+      *surfels);
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
   #endif
@@ -2553,7 +2391,7 @@ void RegularizeSurfelsCUDA(
       regularization_frame_window_size,
       regularizer_weight,
       surfel_count,
-      surfels->ToCUDA());
+      *surfels);
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
   #endif
@@ -2564,7 +2402,7 @@ void RegularizeSurfelsCUDA(
       frame_index,
       regularization_frame_window_size,
       surfel_count,
-      surfels->ToCUDA());
+      *surfels);
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
   #endif
@@ -2597,9 +2435,9 @@ __global__ void ExportVerticesCUDAKernel(
 void ExportVerticesCUDA(
     cudaStream_t stream,
     u32 surfel_count,
-    const CUDABuffer<float>& surfels,
-    CUDABuffer<float>* position_buffer,
-    CUDABuffer<u8>* color_buffer) {
+    const CUDABuffer_<float>& surfels,
+    CUDABuffer_<float>* position_buffer,
+    CUDABuffer_<u8>* color_buffer) {
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
   #endif
@@ -2616,9 +2454,9 @@ void ExportVerticesCUDA(
   ExportVerticesCUDAKernel
   <<<grid_dim, block_dim, 0, stream>>>(
       surfel_count,
-      surfels.ToCUDA(),
-      position_buffer->ToCUDA(),
-      color_buffer->ToCUDA());
+      surfels,
+      *position_buffer,
+      *color_buffer);
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
   #endif
@@ -2646,7 +2484,7 @@ __global__ void DebugPrintSurfelCUDAKernel(
 void DebugPrintSurfelCUDA(
     cudaStream_t stream,
     usize surfel_index,
-    const CUDABuffer<float>& surfels) {
+    const CUDABuffer_<float>& surfels) {
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
   #endif
@@ -2658,11 +2496,27 @@ void DebugPrintSurfelCUDA(
   DebugPrintSurfelCUDAKernel
   <<<grid_dim, block_dim, 0, stream>>>(
       surfel_index,
-      surfels.ToCUDA());
+      surfels);
   #ifdef CUDA_SEQUENTIAL_CHECKS
     cudaDeviceSynchronize();
   #endif
   CHECK_CUDA_NO_ERROR();
+}
+
+void CallCUBExclusiveSum(
+    void* temp_storage,
+    usize& temp_storage_bytes,
+    u8* d_in,
+    u32* d_out,
+    int num_items,
+    cudaStream_t stream) {
+  cub::DeviceScan::ExclusiveSum(
+      temp_storage,
+      temp_storage_bytes,
+      d_in,
+      d_out,
+      num_items,
+      stream);
 }
 
 }

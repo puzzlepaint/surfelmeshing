@@ -31,7 +31,7 @@
 
 #include "surfel_meshing/octree.h"
 
-#include <glog/logging.h>
+#include <libvis/logging.h>
 #include <libvis/timing.h>
 
 namespace vis {
