@@ -63,12 +63,6 @@ target_link_libraries(loguru
   ${CMAKE_DL_LIBS}
 )
 
-# PCL (external)
-find_package(PCL 1.7 REQUIRED)
-include_directories(${PCL_INCLUDE_DIRS})
-link_directories(${PCL_LIBRARY_DIRS})
-add_definitions(${PCL_DEFINITIONS})
-
 # GTest (packaged)
 add_subdirectory(libvis/third_party/gtest)
 enable_testing()

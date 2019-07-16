@@ -27,8 +27,8 @@
 // POSSIBILITY OF SUCH DAMAGE.
 
 
-#include <glog/logging.h>
 #include <gtest/gtest.h>
+#include <libvis/logging.h>
 
 #include "surfel_meshing/surfel_meshing_render_window.h"
 #include "surfel_meshing/surfel_meshing.h"
