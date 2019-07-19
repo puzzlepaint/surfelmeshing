@@ -1836,7 +1836,7 @@ template<> template<typename TargetT> void Image<Vec3u8>::ConvertToGrayscale(Ima
 }
 
 #ifdef WIN32
-#include "libvis/image_template_specializations.h"
+#include "libvis/image_template_specializations.h";
 #endif
 
 }

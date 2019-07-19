@@ -71,6 +71,9 @@ cxx_shared_library(gtest "${cxx_strict}" src/gtest-all.cc)
 cxx_shared_library(gtest_main "${cxx_strict}" src/gtest_main.cc)
 target_link_libraries(gtest_main gtest)
 
+target_compile_definitions(gtest_main PUBLIC _SILENCE_TR1_NAMESPACE_DEPRECATION_WARNING)
+target_compile_definitions(gtest PUBLIC _SILENCE_TR1_NAMESPACE_DEPRECATION_WARNING)
+
 ########################################################################
 #
 # Samples on how to link user tests with gtest or gtest_main.

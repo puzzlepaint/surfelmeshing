@@ -41,6 +41,9 @@
 
 // Uncomment this to run CUDA kernels sequentially for debugging.
 // #define CUDA_SEQUENTIAL_CHECKS
+#ifdef WIN32
+#define M_PI       3.14159265358979323846
+#endif
 
 namespace vis {
 

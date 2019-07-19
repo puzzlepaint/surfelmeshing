@@ -24,7 +24,9 @@ target_include_directories(SurfelMeshing PRIVATE
   third_party
   third_party/cub-1.7.4
 )
-target_link_libraries(SurfelMeshing gmp libvis_cuda ${BASE_LIB_LIBRARIES} X11)
+target_link_libraries(SurfelMeshing libvis_cuda ${BASE_LIB_LIBRARIES} 
+  ${X11_LIBRARIES}
+	)
 
 # Tests.
 add_executable(SurfelMeshing_Octree_Test
@@ -39,7 +41,7 @@ target_include_directories(SurfelMeshing_Octree_Test PRIVATE
 target_link_libraries(SurfelMeshing_Octree_Test
   ${BASE_LIB_LIBRARIES}
   gtest
-  pthread
+  Threads::Threads
 )
 add_test(SurfelMeshing_Octree_Test
   SurfelMeshing_Octree_Test
@@ -56,12 +58,14 @@ cuda_add_executable(SurfelMeshing_Triangulation_Test
 target_include_directories(SurfelMeshing_Triangulation_Test PRIVATE
   src
 )
+if (UNIX)
+  find_package(X11 REQUIRED)
+endif()
 target_link_libraries(SurfelMeshing_Triangulation_Test
   ${BASE_LIB_LIBRARIES}
-  gmp
   gtest
-  pthread
-  X11
+  Threads::Threads
+  ${X11_LIBRARIES}
 )
 add_test(SurfelMeshing_Triangulation_Test
   SurfelMeshing_Triangulation_Test

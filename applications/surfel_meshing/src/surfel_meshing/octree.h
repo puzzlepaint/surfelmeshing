@@ -37,6 +37,12 @@
 
 #include "surfel_meshing/surfel.h"
 
+#if WIN32
+#define PORTABLE_CLZ __lzcnt
+#else
+#define PORTABLE_CLZ  __builtin_clz
+#endif
+
 // Uncomment this to enable storing triangles in the octree. This is very slow.
 // #define KEEP_TRIANGLES_IN_OCTREE
 
@@ -545,7 +551,7 @@ class CompressedOctree {
     // Count leading zeros in rounded_factor and invert the result to get
     // the number of "occupied" bits. Subtract 1 to get log2(rounded_factor).
     // Note that __builtin_clz() is undefined if its argument is 0.
-    int level = (8 * sizeof(unsigned int)) - __builtin_clz(rounded_factor) - 1;
+    int level = (8 * sizeof(unsigned int)) - PORTABLE_CLZ(rounded_factor) - 1;
     
     // Compute the new midpoint.
     float midpoint_dist = old_root_extent * (1 << level);
@@ -672,7 +678,7 @@ class CompressedOctree {
       return 0;
     }
     
-    return (8 * sizeof(unsigned int)) - __builtin_clz(max_differences);
+    return (8 * sizeof(unsigned int)) - PORTABLE_CLZ(max_differences);
   }
   
   // Deletes a node with only a single child and puts the child into its place.

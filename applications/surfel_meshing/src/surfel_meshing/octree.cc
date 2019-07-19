@@ -34,6 +34,7 @@
 #include <libvis/logging.h>
 #include <libvis/timing.h>
 
+
 namespace vis {
 
 usize OctreeNode::CountSurfelsRecursive() const {
@@ -202,7 +203,7 @@ void CompressedOctree::AddSurfelActive(u32 surfel_index, Surfel* surfel) {
         // Count leading zeros in rounded_factor and invert the result to get
         // the number of "occupied" bits. Subtract 1 to get log2(rounded_factor).
         // Note that __builtin_clz() is undefined if its argument is 0.
-        int level = (8 * sizeof(unsigned int)) - __builtin_clz(rounded_factor) - 1;
+        int level = (8 * sizeof(unsigned int)) - PORTABLE_CLZ(rounded_factor) - 1;
         
         // level is 0 if sorting the surfels into the quarters of the current
         // node will definitely separate them (their max distance is in
@@ -964,7 +965,7 @@ OctreeNode* CompressedOctree::SortSurfelsInNodeDownwardsOneStep(OctreeNode* node
   // Count leading zeros in rounded_factor and invert the result to get
   // the number of "occupied" bits. Subtract 1 to get log2(rounded_factor).
   // Note that __builtin_clz() is undefined if its argument is 0.
-  int level = (8 * sizeof(unsigned int)) - __builtin_clz(rounded_factor) - 1;
+  int level = (8 * sizeof(unsigned int)) - PORTABLE_CLZ(rounded_factor) - 1;
   
   // If level > 0, a new node in a quarter must be created to separate the
   // points. If level == 0, the base node itself separates the points using
@@ -1033,7 +1034,7 @@ OctreeNode* CompressedOctree::SortSurfelsInNodeDownwardsOneStep(OctreeNode* node
             } else {
               smaller_extent = existing_child->half_extent;
               int int_factor = (existing_child->half_extent / current_node->half_extent) + 0.5f;  // Round.
-              smaller_level = level + (8 * sizeof(unsigned int)) - __builtin_clz(int_factor) - 1;
+              smaller_level = level + (8 * sizeof(unsigned int)) - PORTABLE_CLZ(int_factor) - 1;
             }
             
             int level_difference_plus_one =

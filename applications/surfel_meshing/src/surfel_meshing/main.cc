@@ -51,10 +51,18 @@
 #include <libvis/shader_program_opengl.h>
 #include <libvis/sophus.h>
 #include <libvis/timing.h>
+#include <libvis/image.h>
 #include <signal.h>
 #include <spline_library/splines/uniform_cr_spline.h>
+#include <chrono> 
+#include <thread>
+
+#ifndef WIN32
 #include <termios.h>
 #include <unistd.h>
+#else
+#include <conio.h> // _getch()
+#endif
 
 #include "surfel_meshing/asynchronous_meshing.h"
 #include "surfel_meshing/cuda_depth_processing.cuh"
@@ -68,7 +76,12 @@ using namespace vis;
 
 // Get a key press from the terminal without requiring the Return key to confirm.
 // From https://stackoverflow.com/questions/421860
-char getch() {
+#ifdef WIN32
+char portable_getch() {
+    return _getch();
+}
+#else WIN32
+char portable_getch() {
   char buf = 0;
   struct termios old = {0};
   if (tcgetattr(0, &old) < 0) {
@@ -91,6 +104,7 @@ char getch() {
   }
   return (buf);
 }
+#endif
 
 
 // Helper to use splines from the used spline library with single-dimension values.
@@ -239,14 +253,23 @@ void MedianFilterAndDensifyDepthMap(const Image<u16>& input, Image<u16>* output)
 
 
 int LIBVIS_MAIN(int argc, char** argv) {
+#ifdef WIN32
+    ImageIOLibPngRegistrator image_io_libpng_registrator_;
+    ImageIONetPBMRegistrator image_io_netpbm_registrator_;
+#ifdef LIBVIS_HAVE_QT
+    ImageIOQtRegistrator image_io_qt_registrator_;
+#endif
+#endif
   // Ignore SIGTTIN and SIGTTOU. I am not sure why they occurred: it seems that
   // they should only occur for background processes trying to interact with the
   // terminal, but they seemingly happened to me while there was no background
   // process and they interfered with using gdb.
   // TODO: Find out the reason for those signals
+#ifndef WIN32
   signal(SIGTTIN, SIG_IGN);
   signal(SIGTTOU, SIG_IGN);
-  
+#endif
+
   
   // ### Parse parameters ###
   
@@ -1011,9 +1034,16 @@ int LIBVIS_MAIN(int argc, char** argv) {
     SE3f input_depth_frame_scaled_frame_T_global = input_depth_frame->frame_T_global();
     input_depth_frame_scaled_frame_T_global.translation() = depth_scaling * input_depth_frame_scaled_frame_T_global.translation();
     
+#ifdef WIN32 
+    std::vector< const CUDABuffer_<u16>*   >  other_depths(outlier_filtering_frame_count);
+    std::vector<SE3f> global_TR_others(outlier_filtering_frame_count);
+    std::vector<CUDAMatrix3x4> others_TR_reference(outlier_filtering_frame_count);
+#else
     const CUDABuffer_<u16>* other_depths[outlier_filtering_frame_count];
     SE3f global_TR_others[outlier_filtering_frame_count];
     CUDAMatrix3x4 others_TR_reference[outlier_filtering_frame_count];
+#endif
+
     for (int i = 0; i < outlier_filtering_frame_count / 2; ++ i) {
       int offset = i + 1;
       
@@ -1041,8 +1071,8 @@ int LIBVIS_MAIN(int argc, char** argv) {
               depth_camera.parameters()[1], \
               depth_camera.parameters()[2], \
               depth_camera.parameters()[3], \
-              other_depths, \
-              others_TR_reference, \
+              other_depths.data(), \
+              others_TR_reference.data(), \
               &filtered_depth_buffer_B.ToCUDA())
       if (outlier_filtering_frame_count == 2) {
         CALL_OUTLIER_FUSION(2);
@@ -1068,8 +1098,8 @@ int LIBVIS_MAIN(int argc, char** argv) {
               depth_camera.parameters()[1], \
               depth_camera.parameters()[2], \
               depth_camera.parameters()[3], \
-              other_depths, \
-              others_TR_reference, \
+              other_depths.data(), \
+              others_TR_reference.data(), \
               &filtered_depth_buffer_B.ToCUDA())
       if (outlier_filtering_frame_count == 2) {
         CALL_OUTLIER_FUSION(2);
@@ -1267,7 +1297,11 @@ int LIBVIS_MAIN(int argc, char** argv) {
         // No need for efficiency here, use simple polling waiting
         LOG(INFO) << "Waiting for final mesh ...";
         while (!triangulation_thread->all_work_done()) {
+#ifdef WIN32 // XXX is this working as well as usleep 0?
+            Sleep(0);
+#else
           usleep(0);
+#endif
         }
         triangulation_thread->RequestExitAndWaitForIt();
         LOG(INFO) << "Got final mesh";
@@ -1277,6 +1311,7 @@ int LIBVIS_MAIN(int argc, char** argv) {
       u32 output_frame_index;
       u32 output_surfel_count;
       triangulation_thread->GetOutput(&output_frame_index, &output_surfel_count, &output_mesh);
+        LOG(INFO) << "Got final mesh   1";
       
       if (output_mesh) {
         // There is a new mesh.
@@ -1284,6 +1319,7 @@ int LIBVIS_MAIN(int argc, char** argv) {
         latest_mesh_surfel_count = output_surfel_count;
         latest_mesh_triangle_count = output_mesh->triangles().size();
       }
+        LOG(INFO) << "Got final mesh   2";
       
       // Update visualization.
       unique_lock<mutex> render_mutex_lock(render_window->render_mutex());
@@ -1298,11 +1334,14 @@ int LIBVIS_MAIN(int argc, char** argv) {
           visualize_radii,
           visualize_surfel_normals);
       render_window->UpdateVisualizationCloudCUDA(reconstruction.surfels_size(), latest_mesh_surfel_count);
+        LOG(INFO) << "Got final mesh   3";
       if (output_mesh) {
         render_window->UpdateVisualizationMeshCUDA(output_mesh);
       }
+        LOG(INFO) << "Got final mesh   4";
       cudaStreamSynchronize(stream);
       render_mutex_lock.unlock();
+        LOG(INFO) << "Got final mesh   5";
       
       if (frame_index % kStatsLogInterval == 0) {
         LOG(INFO) << "[frame " << frame_index << "] #surfels: " << reconstruction.surfel_count() << ", #triangles (of latest mesh): " << latest_mesh_triangle_count;
@@ -1516,7 +1555,7 @@ int LIBVIS_MAIN(int argc, char** argv) {
     
     if (step_by_step_playback || (show_result && is_last_frame)) {
       while (true) {
-        int key = getch();
+        int key = portable_getch();
         
         if (key == 10) {
           // Return key.
@@ -1651,7 +1690,11 @@ int LIBVIS_MAIN(int argc, char** argv) {
     if (actual_frame_time < min_frame_time) {
       constexpr float kSecondsToMicroSeconds = 1000 * 1000;
       usize microseconds = kSecondsToMicroSeconds * (min_frame_time - actual_frame_time);
-      usleep(microseconds);
+#ifdef WIN32 // XXX is this working?
+          std::this_thread::sleep_for(std::chrono::microseconds(microseconds));
+#else
+          usleep(microseconds);
+#endif
     }
   }  // End of main loop
   

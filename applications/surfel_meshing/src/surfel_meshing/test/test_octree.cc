@@ -314,7 +314,7 @@ TEST(CompressedOctree, StructureTestsWithNastyPointsActiveAndPassive) {
       for (usize surfel_index = 0; surfel_index < kBaseSurfelCount; ++ surfel_index) {
         Vec3f base_position = 10.0f * Vec3f::Random();
         surfels.push_back(Surfel(base_position, /*radius_squared*/ 1.0f, /*normal*/ Vec3f(1, 0, 0), 0));
-        for (uint o = 0; o < sizeof(kOffsets) / sizeof(kOffsets[0]); ++ o) {
+        for (unsigned int o = 0; o < sizeof(kOffsets) / sizeof(kOffsets[0]); ++ o) {
           surfels.push_back(Surfel(base_position + kOffsets[o], /*radius_squared*/ 1.0f, /*normal*/ Vec3f(1, 0, 0), 0));
         }
       }
@@ -576,7 +576,7 @@ TEST(CompressedOctree, MoveSurfels) {
           /*radius_squared*/ 1.0f,
           /*normal*/ Vec3f(1, 0, 0),
           0));
-      for (uint o = 0; o < sizeof(kOffsets) / sizeof(kOffsets[0]); ++ o) {
+      for (unsigned int o = 0; o < sizeof(kOffsets) / sizeof(kOffsets[0]); ++ o) {
         surfels.push_back(Surfel(base_position + kOffsets[o], /*radius_squared*/ 1.0f, /*normal*/ Vec3f(1, 0, 0), 0));
       }
     }
