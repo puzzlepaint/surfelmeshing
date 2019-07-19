@@ -184,6 +184,7 @@ A list of optional program arguments follows, grouped by category:
 #### Dataset playback ####
 
 * `--depth_scaling` (default 5000): Input depth scaling: input_depth = depth_scaling * depth_in_meters. The default is for TUM RGB-D benchmark datasets.
+* `--max_pose_interpolation_time_extent` (default 0.05): The maximum time (in seconds) between the timestamp of a frame, and the preceding respectively succeeding trajectory pose timestamp, to interpolate the frame's pose. If this threshold is exceeded, the frame will be dropped since no close-enough pose information is available.
 * `--start_frame` (default 0): First frame of the video to process.
 * `--end_frame` (default: 2147483647): If the video is longer, processing stops after end_frame.
 * `--pyramid_level` (default: 0): Specify the scale-space pyramid level to use. 0 uses the original sized images, 1 uses half the original resolution, etc.

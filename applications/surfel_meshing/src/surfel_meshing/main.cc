@@ -281,6 +281,11 @@ int LIBVIS_MAIN(int argc, char** argv) {
       "--depth_scaling", &depth_scaling, /*required*/ false,
       "Input depth scaling: input_depth = depth_scaling * depth_in_meters. The default is for TUM RGB-D benchmark datasets.");
   
+  float max_pose_interpolation_time_extent = 0.05f;
+  cmd_parser.NamedParameter(
+      "--max_pose_interpolation_time_extent", &max_pose_interpolation_time_extent, /*required*/ false,
+      "The maximum time (in seconds) between the timestamp of a frame, and the preceding respectively succeeding trajectory pose timestamp, to interpolate the frame's pose. If this threshold is exceeded, the frame will be dropped since no close-enough pose information is available.");
+  
   int start_frame = 0;
   cmd_parser.NamedParameter(
       "--start_frame", &start_frame, /*required*/ false,
@@ -617,7 +622,7 @@ int LIBVIS_MAIN(int argc, char** argv) {
   // Load dataset.
   RGBDVideo<Vec3u8, u16> rgbd_video;
   
-  if (!ReadTUMRGBDDatasetAssociatedAndCalibrated(dataset_folder_path.c_str(), trajectory_filename.c_str(), &rgbd_video)) {
+  if (!ReadTUMRGBDDatasetAssociatedAndCalibrated(dataset_folder_path.c_str(), trajectory_filename.c_str(), &rgbd_video, max_pose_interpolation_time_extent)) {
     LOG(FATAL) << "Could not read dataset.";
   } else {
     CHECK_EQ(rgbd_video.depth_frames_mutable()->size(), rgbd_video.color_frames_mutable()->size());

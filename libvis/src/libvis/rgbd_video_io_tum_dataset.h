@@ -41,7 +41,12 @@
 namespace vis {
 
 template <typename PoseScalar>
-bool InterpolatePose(double timestamp, const vector<double>& pose_timestamps, const vector<Sophus::SE3<PoseScalar>>& poses, Sophus::SE3<PoseScalar>* pose) {
+bool InterpolatePose(
+    double timestamp,
+    const vector<double>& pose_timestamps,
+    const vector<Sophus::SE3<PoseScalar>>& poses,
+    Sophus::SE3<PoseScalar>* pose,
+    double max_interpolation_time_extent = numeric_limits<double>::infinity()) {
   CHECK_EQ(pose_timestamps.size(), poses.size());
   CHECK_GE(pose_timestamps.size(), 2u);
   
@@ -56,6 +61,11 @@ bool InterpolatePose(double timestamp, const vector<double>& pose_timestamps, co
   // TODO: Binary search should be faster (or with given starting point if having monotonically increasing query points as is the case below).
   for (usize i = 0; i < pose_timestamps.size() - 1; ++ i) {
     if (timestamp >= pose_timestamps[i] && timestamp <= pose_timestamps[i + 1]) {
+      if ((timestamp - pose_timestamps[i]) > max_interpolation_time_extent ||
+          (pose_timestamps[i + 1] - timestamp) > max_interpolation_time_extent) {
+        return false;
+      }
+      
       double factor = (timestamp - pose_timestamps[i]) / (pose_timestamps[i + 1] - pose_timestamps[i]);
       
       const Sophus::SE3<PoseScalar>& pose_a = poses[i];
@@ -128,7 +138,8 @@ template<typename ColorT, typename DepthT>
 bool ReadTUMRGBDDatasetAssociatedAndCalibrated(
     const char* dataset_folder_path,
     const char* trajectory_filename,
-    RGBDVideo<ColorT, DepthT>* rgbd_video) {
+    RGBDVideo<ColorT, DepthT>* rgbd_video,
+    double max_interpolation_time_extent = numeric_limits<double>::infinity()) {
   rgbd_video->color_frames_mutable()->clear();
   rgbd_video->depth_frames_mutable()->clear();
   
@@ -187,7 +198,7 @@ bool ReadTUMRGBDDatasetAssociatedAndCalibrated(
     SE3f rgb_global_T_frame;
     double rgb_timestamp = atof(rgb_time_string);
     if (!poses_global_T_frame.empty()) {
-      if (!InterpolatePose(rgb_timestamp, pose_timestamps, poses_global_T_frame, &rgb_global_T_frame)) {
+      if (!InterpolatePose(rgb_timestamp, pose_timestamps, poses_global_T_frame, &rgb_global_T_frame, max_interpolation_time_extent)) {
         continue;
       }
     }
@@ -195,7 +206,7 @@ bool ReadTUMRGBDDatasetAssociatedAndCalibrated(
     SE3f depth_global_T_frame;
     double depth_timestamp = atof(depth_time_string);
     if (!poses_global_T_frame.empty()) {
-      if (!InterpolatePose(depth_timestamp, pose_timestamps, poses_global_T_frame, &depth_global_T_frame)) {
+      if (!InterpolatePose(depth_timestamp, pose_timestamps, poses_global_T_frame, &depth_global_T_frame, max_interpolation_time_extent)) {
         continue;
       }
     }
