@@ -38,6 +38,7 @@ target_link_libraries(SurfelMeshing
 add_executable(SurfelMeshing_Octree_Test
   src/surfel_meshing/test/test_octree.cc
   src/surfel_meshing/test/main.cc
+  src/surfel_meshing/dummy.cu
   # TODO: Compile the file(s) below into a common base lib?
   src/surfel_meshing/octree.cc
 )
@@ -56,6 +57,7 @@ add_test(SurfelMeshing_Octree_Test
 add_executable(SurfelMeshing_Triangulation_Test
   src/surfel_meshing/test/test_triangulation.cc
   src/surfel_meshing/test/main.cc
+  src/surfel_meshing/dummy.cu
   # TODO: Compile the files below into a common base lib?
   src/surfel_meshing/surfel_meshing.cc
   src/surfel_meshing/octree.cc
@@ -72,6 +74,7 @@ target_link_libraries(SurfelMeshing_Triangulation_Test
   gtest
   Threads::Threads
   ${X11_LIBRARIES}
+  libvis_cuda
 )
 add_test(SurfelMeshing_Triangulation_Test
   SurfelMeshing_Triangulation_Test
