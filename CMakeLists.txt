@@ -2,25 +2,58 @@ cmake_minimum_required(VERSION 2.8.11)
 
 project(libvis)
 
+set(CMAKE_CXX_STANDARD 11)
+
 # Make CMake find the Find<Package>.cmake files.
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake")
-
 
 ################################################################################
 # Dependencies and settings.
 
+if(MSVC)
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /MP")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /MP")
+  message ("Enabling parallel builds in visual studio")
+endif()
+
 # CUDA (external)
+# Enable C++11 globally
+# NOTE: The user of this CMake file should set the CUDA arch when invoking
+#       CMake, for example with: -DCMAKE_CUDA_FLAGS="-arch=sm_61"
+#       Common settings are either the 'native' arch for which the binary will
+#       be known to run on exclusively, or a broader set of PTX architectures
+#       in case the binary is intended for distribution.
 find_package(CUDA REQUIRED)
-include(${CMAKE_SOURCE_DIR}/cmake/SelectCudaComputeArch.cmake)
-# if(CUDA_MULTI_ARCH)
-#     CUDA_SELECT_NVCC_ARCH_FLAGS(CUDA_ARCH_FLAGS All)
-# else()
-    CUDA_SELECT_NVCC_ARCH_FLAGS(CUDA_ARCH_FLAGS Auto)
-# endif()
-list(APPEND CUDA_NVCC_FLAGS ${CUDA_ARCH_FLAGS})
-list(APPEND CUDA_NVCC_FLAGS "-std=c++11")
-list(APPEND CUDA_NVCC_FLAGS "-Xcompiler -fPIC")
-list(APPEND CUDA_NVCC_FLAGS "-use_fast_math")
+if (CMAKE_CUDA_COMPILER)
+  enable_language(CUDA)
+  
+  # Enable C++11 globally for CUDA code
+  if(NOT DEFINED CMAKE_CUDA_STANDARD)
+    set(CMAKE_CUDA_STANDARD 11)
+    set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+  endif()
+endif()
+
+
+if (NOT MSVC)
+  include(${CMAKE_SOURCE_DIR}/cmake/SelectCudaComputeArch.cmake)
+  # if(CUDA_MULTI_ARCH)
+       CUDA_SELECT_NVCC_ARCH_FLAGS(CUDA_ARCH_FLAGS All)
+  # else()
+  #    CUDA_SELECT_NVCC_ARCH_FLAGS(CUDA_ARCH_FLAGS Auto)
+  # endif()
+  list(APPEND CUDA_NVCC_FLAGS ${CUDA_ARCH_FLAGS})
+  if(CMAKE_COMPILER_IS_GNUCC OR CMAKE_COMPILER_IS_GNUXX)
+  	list(APPEND CUDA_NVCC_FLAGS "-Xcompiler -fPIC")
+  endif()
+  list(APPEND CUDA_NVCC_FLAGS "-use_fast_math")
+endif()
+
+
+# Cross-platform threading. See:
+# https://cmake.org/cmake/help/latest/module/FindThreads.html
+find_package(Threads REQUIRED)
+find_package(OpenGL REQUIRED)
 
 # Eigen (external)
 find_package(Eigen3)
@@ -34,6 +67,10 @@ include_directories(${EIGEN3_INCLUDE_DIR})
 # endif()
 
 # Boost (external)
+
+if (POLICY CMP0074) # get rid of annoying warning
+  cmake_policy(SET CMP0074 NEW)
+endif()
 find_package(Boost COMPONENTS serialization filesystem system REQUIRED)
 include_directories(${Boost_INCLUDE_DIR})
 
@@ -99,7 +136,10 @@ set(CMAKE_AUTOMOC ON)
 # Instruct CMake to run rcc (resource compiler) automatically when needed.
 set(CMAKE_AUTORCC ON)
 find_package(Qt5Widgets)
-find_package(Qt5X11Extras)
+
+if (UNIX AND NOT APPLE)
+  find_package(Qt5X11Extras REQUIRED)
+endif()
 find_package(Qt5OpenGL)
 
 if(Qt5Widgets_FOUND)
@@ -107,14 +147,12 @@ if(Qt5Widgets_FOUND)
 endif()
 
 
-# Settings.
-add_definitions("-Wall -Wextra -O2 -msse2 -msse3 -std=c++11")
-
-# TODO: It seems gcc cannot disable this locally, therefore added it here as a
-#       workaround.
-add_definitions("-Wno-unknown-pragmas")
-
 if(CMAKE_COMPILER_IS_GNUCC OR CMAKE_COMPILER_IS_GNUXX)
+  # Settings.
+  add_definitions("-Wall -Wextra -O2 -msse2 -msse3 -std=c++11")
+  # TODO: It seems gcc cannot disable this locally, therefore added it here as a
+  #       workaround.
+  add_definitions("-Wno-unknown-pragmas")
   add_definitions("-Wno-missing-field-initializers")
 endif()
 
@@ -267,21 +305,26 @@ if(VULKAN_FOUND)
     ${LIBVIS_FILES}
   )
 endif()
-add_library(libvis SHARED
+
+
+add_library(libvis 
   ${LIBVIS_FILES}
 )
+
+if(MSVC)
+  target_compile_definitions(libvis PUBLIC NOMINMAX) # to get rid of max define
+endif()
 
 set(BASE_LIB_LIBRARIES
   ${Boost_LIBRARIES}
   ${GLEW_LIBRARIES}
-  GL
+  ${OPENGL_LIBRARY}
   loguru
-  Qt5::Widgets
-  Qt5::X11Extras
-  Qt5::OpenGL
+  ${Qt5Widgets_LIBRARIES}
+  ${Qt5X11Extras_LIBRARIES}
+  ${Qt5Opengl_LIBRARIES}
   png
-  z
-  pthread
+  Threads::Threads
 )
 if(VULKAN_FOUND)
   set(BASE_LIB_LIBRARIES
@@ -300,7 +343,7 @@ set(BASE_LIB_LIBRARIES
 
 # libvis optional library: libvis_cuda.
 # Contains CUDA functionality, which is only useful with NVIDIA graphics cards.
-cuda_add_library(libvis_cuda SHARED
+cuda_add_library(libvis_cuda 
   libvis/src/libvis/cuda/cuda_auto_tuner.h
   libvis/src/libvis/cuda/cuda_buffer.cu
   libvis/src/libvis/cuda/cuda_buffer.cuh
