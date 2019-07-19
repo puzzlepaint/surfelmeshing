@@ -46,9 +46,15 @@ After obtaining all dependencies, the application can be built with CMake, for e
 ```
 mkdir build_RelWithDebInfo
 cd build_RelWithDebInfo
-cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo ..
+cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CUDA_FLAGS="-arch=sm_61" ..
 make -j SurfelMeshing
 ```
+
+Make sure to specify suitable CUDA architecture(s) in CMAKE_CUDA_FLAGS.
+Common settings would either be the CUDA architecture of your graphics card only (in case
+you only intend to run the compiled application on the system it was compiled on), or a range of virtual
+architectures (in case the compiled application is intended for distribution).
+See the [corresponding CUDA documentation](https://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/index.html#options-for-steering-gpu-code-generation-gpu-architecture).
 
 
 ## Running ##

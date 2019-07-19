@@ -981,6 +981,7 @@ __device__ void IntegrateOrConflictSurfel(
   }
 }
 
+__launch_bounds__(/*maxThreadsPerBlock*/ 1024, /*minBlocksPerMultiprocessor*/ 1)
 __global__ void IntegrateMeasurementsCUDAKernel(
     u32 frame_index,
     int surfel_integration_active_window_size,

@@ -1,20 +1,28 @@
 cmake_minimum_required(VERSION 2.8.11)
+project(libvis LANGUAGES C CXX)
 
-project(libvis)
 
+# Enable C++11 globally
 set(CMAKE_CXX_STANDARD 11)
 
-# Make CMake find the Find<Package>.cmake files.
-set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake")
-
-################################################################################
-# Dependencies and settings.
+# Support IDEs: https://cliutils.gitlab.io/modern-cmake/chapters/features/ides.html
+set_property(GLOBAL PROPERTY USE_FOLDERS ON)
+set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "cmake-default-targets")
 
 if(MSVC)
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /MP")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /MP")
   message ("Enabling parallel builds in visual studio")
 endif()
+
+# Make CMake find the Find<Package>.cmake files in the cmake subdirectory.
+set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake")
+
+include(CheckLanguage)
+
+
+################################################################################
+# Dependencies and settings.
 
 # CUDA (external)
 # Enable C++11 globally
@@ -23,7 +31,7 @@ endif()
 #       Common settings are either the 'native' arch for which the binary will
 #       be known to run on exclusively, or a broader set of PTX architectures
 #       in case the binary is intended for distribution.
-find_package(CUDA REQUIRED)
+check_language(CUDA)
 if (CMAKE_CUDA_COMPILER)
   enable_language(CUDA)
   
@@ -34,22 +42,6 @@ if (CMAKE_CUDA_COMPILER)
   endif()
 endif()
 
-
-if (NOT MSVC)
-  include(${CMAKE_SOURCE_DIR}/cmake/SelectCudaComputeArch.cmake)
-  # if(CUDA_MULTI_ARCH)
-       CUDA_SELECT_NVCC_ARCH_FLAGS(CUDA_ARCH_FLAGS All)
-  # else()
-  #    CUDA_SELECT_NVCC_ARCH_FLAGS(CUDA_ARCH_FLAGS Auto)
-  # endif()
-  list(APPEND CUDA_NVCC_FLAGS ${CUDA_ARCH_FLAGS})
-  if(CMAKE_COMPILER_IS_GNUCC OR CMAKE_COMPILER_IS_GNUXX)
-  	list(APPEND CUDA_NVCC_FLAGS "-Xcompiler -fPIC")
-  endif()
-  list(APPEND CUDA_NVCC_FLAGS "-use_fast_math")
-endif()
-
-
 # Cross-platform threading. See:
 # https://cmake.org/cmake/help/latest/module/FindThreads.html
 find_package(Threads REQUIRED)
@@ -59,15 +51,7 @@ find_package(OpenGL REQUIRED)
 find_package(Eigen3)
 include_directories(${EIGEN3_INCLUDE_DIR})
 
-# # OpenMP (external)
-# find_package(OpenMP)
-# if (OPENMP_FOUND)
-#   set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
-#   set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
-# endif()
-
 # Boost (external)
-
 if (POLICY CMP0074) # get rid of annoying warning
   cmake_policy(SET CMP0074 NEW)
 endif()
@@ -140,6 +124,14 @@ find_package(Qt5Widgets)
 if (UNIX AND NOT APPLE)
   find_package(Qt5X11Extras REQUIRED)
 endif()
+if (TARGET Qt5::Core AND UNIX)
+  # HACK, see: https://gitlab.kitware.com/cmake/cmake/issues/16915
+  get_property( core_options TARGET Qt5::Core PROPERTY INTERFACE_COMPILE_OPTIONS )
+  string( REPLACE "-fPIC" "" new_core_options "${core_options}" )
+  set_property( TARGET Qt5::Core PROPERTY INTERFACE_COMPILE_OPTIONS ${new_core_options} )
+  set_property( TARGET Qt5::Core PROPERTY INTERFACE_POSITION_INDEPENDENT_CODE "ON" )
+  set( CMAKE_CXX_COMPILE_OPTIONS_PIE "-fPIC" )
+endif()
 find_package(Qt5OpenGL)
 
 if(Qt5Widgets_FOUND)
@@ -147,13 +139,20 @@ if(Qt5Widgets_FOUND)
 endif()
 
 
+# Settings.
 if(CMAKE_COMPILER_IS_GNUCC OR CMAKE_COMPILER_IS_GNUXX)
-  # Settings.
-  add_definitions("-Wall -Wextra -O2 -msse2 -msse3 -std=c++11")
+  set(LIBVIS_WARNING_OPTIONS "$<$<COMPILE_LANGUAGE:CXX>:-Wall>")
+  set(LIBVIS_WARNING_OPTIONS "${LIBVIS_WARNING_OPTIONS};$<$<COMPILE_LANGUAGE:CXX>:-Wextra>")
+  set(LIBVIS_WARNING_OPTIONS "${LIBVIS_WARNING_OPTIONS};$<$<COMPILE_LANGUAGE:CXX>:-O2>")
+  set(LIBVIS_WARNING_OPTIONS "${LIBVIS_WARNING_OPTIONS};$<$<COMPILE_LANGUAGE:CXX>:-msse2>")
+  set(LIBVIS_WARNING_OPTIONS "${LIBVIS_WARNING_OPTIONS};$<$<COMPILE_LANGUAGE:CXX>:-msse3>")
   # TODO: It seems gcc cannot disable this locally, therefore added it here as a
   #       workaround.
-  add_definitions("-Wno-unknown-pragmas")
-  add_definitions("-Wno-missing-field-initializers")
+  set(LIBVIS_WARNING_OPTIONS "${LIBVIS_WARNING_OPTIONS};$<$<COMPILE_LANGUAGE:CXX>:-Wno-unknown-pragmas>")
+  
+  # NOTE: Disabled this since it triggered in a lot of places, including external headers, creating a lot of warning spam.
+  set(LIBVIS_WARNING_OPTIONS "${LIBVIS_WARNING_OPTIONS};$<$<COMPILE_LANGUAGE:CXX>:-Wno-sign-compare>")
+  set(LIBVIS_WARNING_OPTIONS "${LIBVIS_WARNING_OPTIONS};$<$<COMPILE_LANGUAGE:CXX>:-Wno-missing-field-initializers>")
 endif()
 
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
@@ -164,6 +163,15 @@ include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
 add_executable(bin2c
   ./libvis/src/bin2c/main.cc
+)
+set_property(TARGET bin2c PROPERTY FOLDER "libvis")
+
+target_include_directories(bin2c PRIVATE
+  ${Boost_INCLUDE_DIR}
+)
+
+target_compile_options(bin2c PRIVATE
+  "${LIBVIS_WARNING_OPTIONS}"
 )
 target_link_libraries(bin2c
   ${Boost_LIBRARIES}
@@ -306,9 +314,13 @@ if(VULKAN_FOUND)
   )
 endif()
 
-
 add_library(libvis 
   ${LIBVIS_FILES}
+)
+set_property(TARGET libvis PROPERTY FOLDER "libvis")
+
+target_compile_options(libvis PRIVATE
+  "${LIBVIS_WARNING_OPTIONS}"
 )
 
 if(MSVC)
@@ -343,7 +355,7 @@ set(BASE_LIB_LIBRARIES
 
 # libvis optional library: libvis_cuda.
 # Contains CUDA functionality, which is only useful with NVIDIA graphics cards.
-cuda_add_library(libvis_cuda 
+add_library(libvis_cuda 
   libvis/src/libvis/cuda/cuda_auto_tuner.h
   libvis/src/libvis/cuda/cuda_buffer.cu
   libvis/src/libvis/cuda/cuda_buffer.cuh
@@ -360,8 +372,19 @@ cuda_add_library(libvis_cuda
   libvis/src/libvis/cuda/pixel_corner_projector.cuh
   libvis/src/libvis/cuda/pixel_corner_projector.h
 )
+set_property(TARGET libvis_cuda PROPERTY FOLDER "libvis")
+target_include_directories(libvis_cuda PUBLIC
+  ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}
+)
+target_compile_options(libvis_cuda PRIVATE
+  "${LIBVIS_WARNING_OPTIONS}"
+)
 target_link_libraries(libvis_cuda
   libvis
+)
+target_compile_options(libvis_cuda PRIVATE
+  $<$<COMPILE_LANGUAGE:CUDA>:-use_fast_math>
+  $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
 )
 
 

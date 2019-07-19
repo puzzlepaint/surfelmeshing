@@ -80,7 +80,7 @@ using namespace vis;
 char portable_getch() {
     return _getch();
 }
-#else WIN32
+#else
 char portable_getch() {
   char buf = 0;
   struct termios old = {0};
@@ -1034,16 +1034,10 @@ int LIBVIS_MAIN(int argc, char** argv) {
     SE3f input_depth_frame_scaled_frame_T_global = input_depth_frame->frame_T_global();
     input_depth_frame_scaled_frame_T_global.translation() = depth_scaling * input_depth_frame_scaled_frame_T_global.translation();
     
-#ifdef WIN32 
-    std::vector< const CUDABuffer_<u16>*   >  other_depths(outlier_filtering_frame_count);
+    std::vector< const CUDABuffer_<u16>* > other_depths(outlier_filtering_frame_count);
     std::vector<SE3f> global_TR_others(outlier_filtering_frame_count);
     std::vector<CUDAMatrix3x4> others_TR_reference(outlier_filtering_frame_count);
-#else
-    const CUDABuffer_<u16>* other_depths[outlier_filtering_frame_count];
-    SE3f global_TR_others[outlier_filtering_frame_count];
-    CUDAMatrix3x4 others_TR_reference[outlier_filtering_frame_count];
-#endif
-
+    
     for (int i = 0; i < outlier_filtering_frame_count / 2; ++ i) {
       int offset = i + 1;
       
@@ -1311,7 +1305,6 @@ int LIBVIS_MAIN(int argc, char** argv) {
       u32 output_frame_index;
       u32 output_surfel_count;
       triangulation_thread->GetOutput(&output_frame_index, &output_surfel_count, &output_mesh);
-        LOG(INFO) << "Got final mesh   1";
       
       if (output_mesh) {
         // There is a new mesh.
@@ -1319,7 +1312,6 @@ int LIBVIS_MAIN(int argc, char** argv) {
         latest_mesh_surfel_count = output_surfel_count;
         latest_mesh_triangle_count = output_mesh->triangles().size();
       }
-        LOG(INFO) << "Got final mesh   2";
       
       // Update visualization.
       unique_lock<mutex> render_mutex_lock(render_window->render_mutex());
@@ -1334,14 +1326,11 @@ int LIBVIS_MAIN(int argc, char** argv) {
           visualize_radii,
           visualize_surfel_normals);
       render_window->UpdateVisualizationCloudCUDA(reconstruction.surfels_size(), latest_mesh_surfel_count);
-        LOG(INFO) << "Got final mesh   3";
       if (output_mesh) {
         render_window->UpdateVisualizationMeshCUDA(output_mesh);
       }
-        LOG(INFO) << "Got final mesh   4";
       cudaStreamSynchronize(stream);
       render_mutex_lock.unlock();
-        LOG(INFO) << "Got final mesh   5";
       
       if (frame_index % kStatsLogInterval == 0) {
         LOG(INFO) << "[frame " << frame_index << "] #surfels: " << reconstruction.surfel_count() << ", #triangles (of latest mesh): " << latest_mesh_triangle_count;

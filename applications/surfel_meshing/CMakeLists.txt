@@ -1,4 +1,4 @@
-cuda_add_executable(SurfelMeshing
+add_executable(SurfelMeshing
   src/surfel_meshing/asynchronous_meshing.cc
   src/surfel_meshing/asynchronous_meshing.h
   src/surfel_meshing/cuda_util.cuh
@@ -19,14 +19,20 @@ cuda_add_executable(SurfelMeshing
   src/surfel_meshing/surfel_meshing_render_window.cc
   src/surfel_meshing/surfel_meshing_render_window.h
 )
+target_compile_options(SurfelMeshing PUBLIC
+  "${LIBVIS_WARNING_OPTIONS}"
+  $<$<COMPILE_LANGUAGE:CUDA>:-use_fast_math>
+)
 target_include_directories(SurfelMeshing PRIVATE
   src
   third_party
   third_party/cub-1.7.4
 )
-target_link_libraries(SurfelMeshing libvis_cuda ${BASE_LIB_LIBRARIES} 
+target_link_libraries(SurfelMeshing
+  libvis_cuda
+  ${BASE_LIB_LIBRARIES} 
   ${X11_LIBRARIES}
-	)
+)
 
 # Tests.
 add_executable(SurfelMeshing_Octree_Test
@@ -47,7 +53,7 @@ add_test(SurfelMeshing_Octree_Test
   SurfelMeshing_Octree_Test
 )
 
-cuda_add_executable(SurfelMeshing_Triangulation_Test
+add_executable(SurfelMeshing_Triangulation_Test
   src/surfel_meshing/test/test_triangulation.cc
   src/surfel_meshing/test/main.cc
   # TODO: Compile the files below into a common base lib?
