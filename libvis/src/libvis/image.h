@@ -64,14 +64,14 @@ struct always_false {
 // Eigen::Matrix type and then return its element count.
 template<typename T>
 struct channel_count_helper {
-  constexpr inline u32 channel_count() const {
+  static constexpr inline u32 channel_count() {
     return 1;
   }
 };
 
 template<typename _Scalar, int _Rows, int _Cols, int _Options, int _MaxRows, int _MaxCols>
 struct channel_count_helper<Matrix<_Scalar, _Rows, _Cols, _Options, _MaxRows, _MaxCols>> {
-  constexpr inline u32 channel_count() const {
+  static constexpr inline u32 channel_count() {
     static_assert(_Rows >= 0 && _Cols >= 0, "Matrices of dynamic size are not supported.");
     return _Rows * _Cols;
   }
@@ -865,7 +865,7 @@ class Image {
   inline void InterpolateBilinearWithJacobian(
       const MatrixBase<Derived>& position,
       InterpolatedT* value,
-      Matrix<JacobianScalarT, channel_count_helper<T>().channel_count(), 2>* jacobian) const {
+      Matrix<JacobianScalarT, channel_count_helper<T>::channel_count(), 2>* jacobian) const {
     InterpolateImageBilinearWithJacobian(this, position, value, jacobian);
   }
   
@@ -873,8 +873,8 @@ class Image {
   // TODO: Document. Warn about invalid accesses: valid parameter range for one axis is [1, image_length - 1[ !
   // TODO: Can this be merged with a scalar version?
   template<typename InterpolatedT = float, typename Derived>
-  inline Matrix<InterpolatedT, channel_count_helper<T>().channel_count(), 1> InterpolateBicubicVector(const MatrixBase<Derived>& position) const {
-    typedef Matrix<InterpolatedT, channel_count_helper<T>().channel_count(), 1> ResultT;
+  inline Matrix<InterpolatedT, channel_count_helper<T>::channel_count(), 1> InterpolateBicubicVector(const MatrixBase<Derived>& position) const {
+    typedef Matrix<InterpolatedT, channel_count_helper<T>::channel_count(), 1> ResultT;
     
     int ix = std::floor(position.coeff(0));
     int iy = std::floor(position.coeff(1));
@@ -1622,7 +1622,7 @@ class Image {
   // used to implement this in a cleaner way), so we work around this by using
   // the partial class specialization of channel_count_helper instead.
   inline constexpr u32 channel_count() const {
-    return channel_count_helper<T>().channel_count();
+    return channel_count_helper<T>::channel_count();
   }
   
   // Returns the stride in bytes.
