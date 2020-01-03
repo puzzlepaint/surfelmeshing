@@ -40,6 +40,8 @@ if (CMAKE_CUDA_COMPILER)
     set(CMAKE_CUDA_STANDARD 11)
     set(CMAKE_CUDA_STANDARD_REQUIRED ON)
   endif()
+else()
+  message(FATAL_ERROR "CMake did not find CUDA, which is required to build this program.")
 endif()
 
 # Cross-platform threading. See:
