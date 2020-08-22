@@ -39,7 +39,7 @@ known to work):
 * CUDA (8, 10.1)
 * Eigen
 * GLEW
-* Qt (5.2.1)
+* Qt (>= 5.10 should likely work)
 * zlib
 
 After obtaining all dependencies, the application can be built with CMake, for example as follows:
